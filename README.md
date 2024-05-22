@@ -1,6 +1,6 @@
-# NLDS-Eq
+# LaNoLem
 
-Code for reproducing [NLDS-Eq](),
+Code for reproducing [LaNoLem](),
 
 Also, main.zip is the archive of this repository.
 
