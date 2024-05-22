@@ -1,0 +1,9 @@
+data_name: #None
+noise_mean: #None
+noise_std: #None
+random_state: 42
+num_steps: #None
+dt: 1.0
+gt: #None
+xticklabels: #None
+yticklabels: #None
