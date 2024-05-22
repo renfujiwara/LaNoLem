@@ -50,15 +50,9 @@ def make_data(data_name, noise_ratio = None, noise_mean=None, noise_std=None, se
         plot_args ={}
         if random_state is None:
             random_state = setting['random_state']
-        # df = pd.read_csv("./dataset/googletrends/outdoor_7.csv", index_col=0)
         df = pd.read_csv("./dataset/googletrends/outdoor_7.csv")
-        ## outdoor
-        # df1 = df.drop(['date', 'Climbing'], axis=1)
-        df1 = df.drop(['date','Diving'], axis=1)
-        # df1 = df.drop(['date', 'Snowboarding', 'Climbing'], axis=1)
-        # ss = preprocessing.StandardScaler()
+        df1 = df.drop(['date'], axis=1)
         df1 = scipy.stats.zscore(df1)
-        # pd.DataFrame(ss.fit_transform(df1.values), columns=df1.columns)
         df1['date'] = pd.to_datetime(df['date'])
         df = df1[(df1['date'] <= "2022-12-25") & (df['date'] >= "2010-04-05")].drop('date',axis=1).copy()
         for name in df.columns:
@@ -67,7 +61,6 @@ def make_data(data_name, noise_ratio = None, noise_mean=None, noise_std=None, se
         df['date'] = df1['date']
         df.dropna(inplace=True)
         df.reset_index(drop=True, inplace=True)
-        # index_df = df['date'].copy()
         df.drop(['date'], axis=1, inplace=True)
         setting['yticklabels'] = df.columns.values
         return df.values, setting
