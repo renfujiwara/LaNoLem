@@ -38,6 +38,7 @@ def _iter(snl, s1nl, Q_inv, init, z, aug_z, lams, k, k_nl, max_iter, ptol):
     y = init.copy()
     l_k = np.sqrt(np.sum(np.power(Q_inv, 2)) * np.sum(np.power(snl, 2)))
     restart_num = 0
+    n = len(z)
     for iter in range(max_iter):
         if restart_num > MAX_RESTART:
             restart_num = 0

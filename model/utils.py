@@ -32,7 +32,8 @@ def make_feature_names(k, dim, features=None):
     return names
 
 
-@njit('f8[:](f8[:],i8,i8[:,:])')
+# @njit('f8[:](f8[:],i8,i8[:,:])')
+@njit(cache=True)
 def make_state_vec(sta, k_nl, comb_list):
     vec = np.zeros(k_nl)
     if k_nl == 0: return vec

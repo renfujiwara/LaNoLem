@@ -24,14 +24,16 @@ h = 1.e-5
 INF = 1.e+10
 
 
-@njit("UniTuple(f8[:,:],2)(f8[:,:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:],i8,i8,i8[:,:])")
+# @njit("UniTuple(f8[:,:],2)(f8[:,:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:],i8,i8,i8[:,:])")
+@njit(cache=True)
 def _defunc(z, A, F, C, b, d, n, k_nl, comb_list):
     for t in range(0,n-1):
         z[t+1] = A @ z[t] + F @ make_state_vec(z[t], k_nl, comb_list) + b
     return z, z @ C.T + d
 
 
-@njit("f8[:,:](f8[:],f8[:,:],f8[:,:],f8[:,:],i8,i8[:,:])")
+# @njit("f8[:,:](f8[:],f8[:,:],f8[:,:],f8[:,:],i8,i8[:,:])")
+@njit(cache=True)
 def _jacobian(z, A, F, j_delta, k_nl, comb_list):
     f_delta = j_delta + z
     b_delta = z - j_delta
@@ -74,7 +76,8 @@ def update_d(data, Ez, C):
     return np.mean(data - Ez @ C.T, axis=0)
 
 
-@njit("f8[:,:](f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:],f8[:,:],f8[:],f8[:,:],i8,i8[:,:])")
+# @njit("f8[:,:](f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:],f8[:,:],f8[:],f8[:,:],i8,i8[:,:])")
+@njit(cache=True)
 def iter_Q(Ez, Szz, Ezz, Ez1z, A, F, b, j_delta, k_nl, comb_list):
     Q = Szz - Ezz[0]
     Ez1z_T = Ez1z.transpose(0,2,1)
@@ -192,7 +195,8 @@ def fit_each(model_org, data, max_iter, hyper_param, return_model = False, multi
     return result
 
 
-@njit("Tuple((f8[:],f8[:],f8[:,:],f8[:,:],f8))(f8[:],f8[:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:,:])")
+# @njit("Tuple((f8[:],f8[:],f8[:,:],f8[:,:],f8))(f8[:],f8[:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:,:])")
+@njit(cache=True)
 def _filter(mu_t, data, P, C, R, d, Ih):
     sgm = C @ P @ C.T + R     
     inv_sgm = inv(sgm)
@@ -211,7 +215,8 @@ def _filter(mu_t, data, P, C, R, d, Ih):
     return mu, mu_o, sgm, V, llh
 
 
-@njit("Tuple((f8[:,:],f8[:]))(f8[:],f8[:,:],i8,i8,i8)")
+# @njit("Tuple((f8[:,:],f8[:]))(f8[:],f8[:,:],i8,i8,i8)")
+@njit(cache=True)
 def moment(Ez, Vhat, k, k_nl, dim_poly):
     Ezz = Vhat + np.outer(Ez, Ez)
     Eznl = np.zeros((k_nl))
@@ -241,7 +246,8 @@ def moment(Ez, Vhat, k, k_nl, dim_poly):
     return Ezz, Eznl
 
 
-@njit("Tuple((f8[:,:],f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8))(f8[:,:],f8[:],f8[:,:],f8[:,:],f8[:],f8[:,:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:,:],i8,i8,i8[:,:])")
+# @njit("Tuple((f8[:,:],f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],f8))(f8[:,:],f8[:],f8[:,:],f8[:,:],f8[:],f8[:,:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:,:],i8,i8,i8[:,:])")
+@njit(cache=True)
 def _forward(data, mu0, A, F, b, Q, Q0, C, R, d, j_delta, k, k_nl, comb_list):
     n, dim_data = data.shape
     Ih = np.eye(k)
@@ -265,7 +271,8 @@ def _forward(data, mu0, A, F, b, Q, Q0, C, R, d, j_delta, k, k_nl, comb_list):
         
     return mu, mu_t, mu_o, sgm, V, P, A_nl_mu, llh
 
-@njit("Tuple((f8[:,:],f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:]))(f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],i8,i8,i8)")
+# @njit("Tuple((f8[:,:],f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:]))(f8[:,:],f8[:,:],f8[:,:,:],f8[:,:,:],f8[:,:,:],i8,i8,i8)")
+@njit(cache=True)
 def _backward(mu, mu_t, V, P, A_nl, k, k_nl, dim_poly):
     n = len(mu)
     Ez = np.zeros((n, k))
@@ -294,9 +301,9 @@ def model_compress(model, dim_poly):
 
 
 class NLDS:
-    def __init__(self, dim_list=[2, 3, 4], lam_list=[1e-3, 1e-2, 1e-1, 1.0, 1e+1, 1e+2], dt=1.0, init_cov_list = [1e+1, 1.0, 1e-1, 1e-2, 1e-3],
+    def __init__(self, dim_list=[2, 3, 4], lam_list=[1e-7, 1e-5, 1e-3, 1e-2, 1e-1, 1.0], dt=1.0, init_cov_list = [1e+1, 1.0, 1e-1, 1e-2, 1e-3],
                  tol = 1.0, ptol = 1.e-20, init_state_cov = "full", trans_cov = "full", obs_cov = "full",
-                 num_works=-1, print_log = False, verbose=False, random_state = 42, naive=True):
+                 num_works=-1, print_log = False, verbose=False, random_state = 42, naive=True, fn=None, ma=1):
         
         self.dim_list = dim_list
         self.comb_lam = lam_list
@@ -315,6 +322,8 @@ class NLDS:
         self.verbose = verbose
         self.random_state = random_state
         self.naive = naive
+        self.fn = fn
+        self.ma=ma
     
     def init_params(self, data):
         k = self.k
@@ -565,6 +574,8 @@ class NLDS:
         model.print_result()
         return model
     
+    def fit_mu0(self, data, wtype='uniform', dps=1):
+        return nl_fit(self, data, "si")
     
     def gen(self, n=None, mu0=None):
         k = self.k
