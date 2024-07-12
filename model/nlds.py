@@ -1,6 +1,8 @@
 import time
 import sys
 from copy import deepcopy
+import warnings
+warnings.simplefilter("ignore", DeprecationWarning)
 
 import os
 import gc
@@ -14,14 +16,20 @@ from concurrent.futures import ProcessPoolExecutor
 import concurrent.futures
 import multiprocessing
 
-from .utils import make_state_vec, make_feature_names, get_k_nl, nl_fit, compute_coding_cost, compute_model_cost
+from .utils import make_state_vec, make_feature_names, get_k_nl, nl_fit, compute_model_cost, compute_coding_cost
 from .proximal_gradient import PG
+from .lds import LDS
+import pysindy as ps
+from pysindy.feature_library import PolynomialLibrary
+from pysindy.optimizers import MIOSR
+import gurobipy as gp
 
 from numba import njit
 from tqdm import tqdm
 
 h = 1.e-5
 INF = 1.e+10
+MAX_ASCENT = 3
 
 
 # @njit("UniTuple(f8[:,:],2)(f8[:,:],f8[:,:],f8[:,:],f8[:,:],f8[:],f8[:],i8,i8,i8[:,:])")
@@ -41,6 +49,7 @@ def _jacobian(z, A, F, j_delta, k_nl, comb_list):
     jacobian = np.zeros((k, k))
     for i in range(k):
         jacobian[:,i] = F @ (make_state_vec(f_delta[i], k_nl, comb_list) - make_state_vec(b_delta[i], k_nl, comb_list))
+        
     
     return jacobian/ (2*h) + A
 
@@ -84,9 +93,7 @@ def iter_Q(Ez, Szz, Ezz, Ez1z, A, F, b, j_delta, k_nl, comb_list):
     for t in range(len(Ez)-1):
         A_nl = _jacobian(Ez[t], A, F, j_delta, k_nl, comb_list)
         ofset = (A - A_nl) @ Ez[t] + F @ make_state_vec(Ez[t], k_nl, comb_list) + b
-        val = A_nl @ Ez1z_T[t]
-        val -= A_nl @ np.outer(Ez[t], ofset)
-        val += np.outer(Ez[t+1], ofset)
+        val = A_nl @ (Ez1z_T[t] - np.outer(Ez[t], ofset)) + np.outer(Ez[t+1], ofset)
         Q += - val - val.T + A_nl @ Ezz[t] @ A_nl.T + np.outer(ofset, ofset)
     
     return Q
@@ -102,7 +109,7 @@ def update_Q(model, Ez, Szz, Ezz, Ez1z, covariance_type):
 
 
 def update_R(data, Ez, Sxx, Szz, Sxz, C, d, covariance_type):
-    val = C @ Sxz.T - C @ np.einsum('ij,l->jl',  Ez, d) + np.einsum('ij,l->jl',  data, d)
+    val = C @ (Sxz.T - np.einsum('ij,l->jl',  Ez, d)) + np.einsum('ij,l->jl',  data, d)
     
     R = Sxx - val - val.T + C @ Szz @ C.T + np.outer(d, d)
     if covariance_type == "diag":
@@ -113,16 +120,16 @@ def update_R(data, Ez, Sxx, Szz, Sxz, C, d, covariance_type):
 
 def fit_each(model_org, data, max_iter, hyper_param, return_model = False, multi = True):
     model = deepcopy(model_org)
-    lams = hyper_param[0]
-    dim_poly = hyper_param[1]
-    model.k = hyper_param[2]
-    model.init_cov = hyper_param[3]
-    model.init_type = hyper_param[4]
+    # lams = hyper_param[0]
+    dim_poly = hyper_param[0]
+    model.k = hyper_param[1]
+    model.init_cov = hyper_param[2]
+    # model.init_type = hyper_param[4]
     
     model.k_nl, model.comb_list = get_k_nl(model.k, dim_poly)
     model.dim_poly = dim_poly
     
-    model.set_lam(lams)
+    # model.set_lam(lams)
     result = {"md":None, "err":None, "mdl":INF, "loss":None, "hyper_param": hyper_param}
     
     model.init_params(data)
@@ -136,6 +143,7 @@ def fit_each(model_org, data, max_iter, hyper_param, return_model = False, multi
     
     best_model = deepcopy(model)
     best_loss = loss_init
+    ascent = 0
     for iteration in range(max_iter):
         model.iter = iteration
         try:
@@ -156,16 +164,20 @@ def fit_each(model_org, data, max_iter, hyper_param, return_model = False, multi
         history_llh.append(llh)
         history_loss.append(loss)
         
-        if abs(history_loss[-1] - history_loss[-2]) < model.tol:
-            conv = 'conv1'
-            break
-        elif history_loss[-1] - loss_init > model.tol * 1e+2:
-            conv = 'conv2'
-            break
-        
         if loss < best_loss:
             best_model = deepcopy(model)
             best_loss = loss
+        
+        if abs(history_loss[-1] - history_loss[-2]) < model.tol:
+            conv = 'conv1'
+            break
+        elif history_loss[-1] > history_loss[-2]:
+            ascent += 1
+            if ascent > MAX_ASCENT:
+                 conv = 'conv2'
+                 break
+        else:
+            ascent = 0
 
 
     best_model.history_loss = history_loss
@@ -301,12 +313,16 @@ def model_compress(model, dim_poly):
 
 
 class NLDS:
-    def __init__(self, dim_list=[2, 3, 4], lam_list=[1e-7, 1e-5, 1e-3, 1e-2, 1e-1, 1.0], dt=1.0, init_cov_list = [1e+1, 1.0, 1e-1, 1e-2, 1e-3],
-                 tol = 1.0, ptol = 1.e-20, init_state_cov = "full", trans_cov = "full", obs_cov = "full",
-                 num_works=-1, print_log = False, verbose=False, random_state = 42, naive=True, fn=None, ma=1):
+    def __init__(self, dim_list=[2, 3, 4], dt=1.0, init_cov_list = [1.0, 1e-1, 1e-2, 1e-3], l_lam = 1.0, nl_lam=1.0, 
+                 tol = 1.0, ptol = 1.e-20, init_state_cov = "diag", trans_cov = "diag", obs_cov = "full",
+                 num_works=-1, print_log = True, verbose=False, random_state = 42, naive=False, fn=None, ma=1):
         
         self.dim_list = dim_list
-        self.comb_lam = lam_list
+        self.ctype = "loss"
+        # self.comb_lam = lam_list
+        self.l_lam = l_lam
+        self.nl_lam = nl_lam
+        
         self.dt = dt
         self.init_cov_list = init_cov_list
         self.tol = tol
@@ -329,35 +345,54 @@ class NLDS:
         k = self.k
         dim_data = self.dim_data
         k_nl = self.k_nl
-        
         if(self.obs_matrix == "diag"):
             self.C = np.eye(dim_data)
-            if self.init_type:
-                self.mu0 = data[0].copy()
-            else:
-                self.mu0 = np.zeros(k)
+            # if self.init_type:
+            #     self.mu0 = data[0].copy()
+            # else:
+            #     self.mu0 = np.zeros(k)
+            self.mu0 = np.zeros(k) 
             self.A = np.eye(k)
             self.F = np.zeros((k,k_nl))
         else:
             if self.naive:
                 rand = np.random.default_rng(self.random_state)
                 self.C = np.eye(dim_data, k) + rand.normal(0, 1, size=(dim_data, k))
-                self.mu0 = rand.normal(0, 1 ,size = k)
+                self.mu0 = np.zeros(k) 
+                self.A = np.eye(k)
+                self.F = np.zeros((k,k_nl))
             else:
                 u, sig, v = np.linalg.svd(data, full_matrices=False)
                 self.C = v[:k].T
                 data_s = u[:,:dim_data] @ np.diag(sig)
                 self.mu0 = data_s[0, :k]
-                
-            self.A = np.eye(k)
-            self.F = np.zeros((k,k_nl))
+                try:
+                    with gp.Env(empty=True) as env:
+                        env.setParam("OutputFlag", 0)
+                        env.setParam("WLSAccessID", str)
+                        env.setParam("WLSSECRET", str)
+                        env.setParam("LICENSEID", int)
+                        env.start()
+                        sindy = ps.SINDy(optimizer=MIOSR(), feature_library=PolynomialLibrary(library_ensemble=None, degree=self.dim_poly))
+                        sindy.fit(data_s, t = self.dt)
+                    self.A = sindy.coefficients()[:,1:k+1]* self.dt + np.eye(k)
+                    self.F = sindy.coefficients()[:,k+1:] * self.dt
+                except:
+                    self.A = np.eye(k)
+                    self.F = np.zeros((k,k_nl))
+             
             
         self.Q0 = np.eye(k) * self.init_cov
         self.Q = np.eye(k) * self.init_cov
         self.R = np.eye(dim_data) * self.init_cov
         self.b = np.zeros(k)
         self.d = np.zeros(dim_data)
-            
+        
+        # lds = LDS(random_state=self.random_state)
+        # # try:
+        # self.lds = lds.fit(data, self.obs_offset, k)
+        # self.set_lds_params(self.lds)
+        # print(self.lds.conv)
         self.history_loss = []
         self.history_llh = []
             
@@ -366,19 +401,20 @@ class NLDS:
         return make_feature_names(self.k, self.dim_poly)
     
     
-    def set_lam(self, lams):
-        self.l_lam = lams
-        self.nl_lam = lams
-        l_lam = np.ones((self.k,self.k)) * lams
-        nl_lam = np.ones((self.k,self.k_nl)) * lams
-        self.lams = np.hstack((l_lam, nl_lam))
+    # def set_lam(self, lams):
+    #     self.l_lam = lams
+    #     self.nl_lam = lams
+    #     l_lam = np.ones((self.k,self.k)) * lams
+    #     nl_lam = np.ones((self.k,self.k_nl)) * lams
+    #     self.lams = np.hstack((l_lam, nl_lam))
         
     
     def initialize(self, data):
         self.n, self.dim_data = np.shape(data)
         k = self.k
         self.j_delta = np.diag(np.full(k, h, dtype=float))
-
+        self.lams = np.hstack((np.ones((k,k)) * self.l_lam, np.ones((k,self.k_nl)) *  self.nl_lam))
+        
         loss = self.score(data)
         self.loss = loss
         llh = self.llh
@@ -438,21 +474,23 @@ class NLDS:
         print(f"d:{self.d}\n")
         print(f"R:{self.R}\n")
         
-    def print_result(self):
+        
+    def print_result(self, err):
         print(f"loss: {self.loss}, mdl: {self.mdl}")
         print(f"lambda(lin): {self.l_lam}, lambda(nlin): {self.nl_lam}")
         print(f'process time: {self.time}')
+        print(f"dim: {self.dim_poly}, k: {self.k}, err: {err}")
         
     
     def modeling_cost(self, data, dim_poly):
         model = deepcopy(self)
         model = model_compress(model, dim_poly)
 
-        cost = compute_model_cost(model.A) + compute_model_cost(model.F) + compute_model_cost(model.C) + compute_model_cost(model.b)
+        cost = compute_model_cost(model.A) + compute_model_cost(model.F) + compute_model_cost(model.C) + compute_model_cost(model.b) + compute_model_cost(model.mu0)
         if model.obs_offset:
             cost += compute_model_cost(model.d) 
-
         try:
+            # cost -= self.loglikelihood(data)
             _, Obs = model.gen()
             cost += compute_coding_cost(data, Obs) 
         except FloatingPointError:
@@ -470,7 +508,7 @@ class NLDS:
     def err(self, data):
         try:
             _, Obs = self.gen()
-            return mse(data, Obs) + self.l1()
+            return mse(data, Obs) #+ self.l1()
         except:
             return INF
         
@@ -500,6 +538,7 @@ class NLDS:
             
     def search_and_fit(self, data, max_iter, hyper_params):
         best_f = None
+        ctype = self.ctype
         if self.num_works > 1:
             if self.verbose:
                 results = {}
@@ -527,7 +566,7 @@ class NLDS:
                 for hyper_param in hyper_params:
                         results[hyper_param] = fit_each(self, data, int(max_iter/2), hyper_param, return_model=False, multi=False)
         
-        i, best_f = min(results.items(), key=lambda x: x[1]['mdl'])     
+        i, best_f = min(results.items(), key=lambda x: x[1][ctype])     
         
         best_f = fit_each(self, data, max_iter, best_f['hyper_param'], return_model=True, multi=False)
         model = best_f["md"]
@@ -536,7 +575,7 @@ class NLDS:
         return model
             
             
-    def fit(self, x, y=None, max_iter=30, k = None, fit_type=None, fit_init=True, batch=False):
+    def fit(self, x, y=None, max_iter=50, k = None, fit_type=None, fit_init=True, batch=False):
         data = x
         np.seterr(over="raise")
         self.n, dim_data = data.shape
@@ -559,23 +598,23 @@ class NLDS:
             sys.exit()
         
         self.fit_type = fit_type
-        hyper_params = itertools.product(self.comb_lam, self.dim_list, k_list, self.init_cov_list, [True, False], repeat=1)
+        hyper_params = itertools.product(self.dim_list, k_list, self.init_cov_list, repeat=1)
         tic1 = time.process_time()
         model =  self.search_and_fit(data, max_iter, hyper_params)
-        
         model = model.compress(data)
-        try:
-            if fit_init:
-                model = nl_fit(model, data, "si")
-        except:
-            pass
+        if fit_init:
+            try:
+                model = nl_fit(model, data, "si", True)
+            except:
+                pass
         tic2 = time.process_time()
         model.time = tic2 - tic1
-        model.print_result()
+        if model.print_log:
+            model.print_result(model.err(data))
         return model
     
     def fit_mu0(self, data, wtype='uniform', dps=1):
-        return nl_fit(self, data, "si")
+        return nl_fit(self, data, "si", True)
     
     def gen(self, n=None, mu0=None):
         k = self.k

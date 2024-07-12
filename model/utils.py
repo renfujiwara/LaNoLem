@@ -1,7 +1,9 @@
 import numpy as np
 import itertools as it
 from scipy.stats import norm
+from copy import deepcopy as dcopy
 from numba import njit
+import model.tool as tl
 import lmfit
 #-----------------------------#
 # lmfit (default)
@@ -65,7 +67,7 @@ def compute_coding_cost(X, Y):
     cost = -1 * logprob.sum() / np.log(2.)
     return cost
 
-def compute_model_cost(X, sparse=True, n_bits=64, zero=1e-8):
+def compute_model_cost(X, sparse=True, n_bits=64, zero=1e-10):
     if sparse:
         X_abs = np.abs(X)
         X_nonzero = np.count_nonzero(X_abs > zero)
@@ -78,15 +80,20 @@ def compute_model_cost(X, sparse=True, n_bits=64, zero=1e-8):
     return X_nonzero * cost + np.log(X.size)
     
 
-def nl_fit(nlds, data, ftype): 
-    nlds=_nl_fit(nlds, data, ftype) 
+def nl_fit(nlds, data, ftype, incremental=False): 
+    nlds_org=dcopy(nlds)
+    nlds=_nl_fit(nlds, data, ftype, incremental) 
+    if(_distfunc_rmse(nlds_org, data, 'org')<_distfunc_rmse(nlds, data, 'fit')): nlds=nlds_org #notfin
     return nlds 
 
 
-def _nl_fit(nlds, data, ftype): 
+def _nl_fit(nlds, data, ftype, incremental): 
     P=_createP(nlds, ftype)
     lmsol = lmfit.Minimizer(_distfunc, P, fcn_args=(data, nlds, ftype))
-    res=lmsol.leastsq(xtol=XTL, ftol=FTL, max_nfev=MAXFEV)
+    if incremental:
+        res=lmsol.leastsq(xtol=0.1, ftol=0.1, max_nfev=20)
+    else:
+        res=lmsol.leastsq(xtol=XTL, ftol=FTL, max_nfev=MAXFEV)
     nlds=_updateP(res.params, nlds, ftype)
     return nlds 
 
@@ -109,8 +116,17 @@ def _updateP(P, nlds, ftype):
 
 def _distfunc(P, data, nlds, ftype):
     n=data.shape[0]
-    nlds=_updateP(P,nlds, ftype)
+    nlds=_updateP(P, nlds, ftype)
     (Sta, Obs)=nlds.gen(n) 
     diff=data.flatten() - Obs.flatten()
     diff[np.isnan(diff)]=0
     return diff
+
+def _distfunc_rmse(nlds, data, ftype):
+    try:
+        (Sta, Obs)=nlds.gen(len(data)) 
+        err = tl.RMSE(data, Obs)
+    except:
+        err = tl.INF
+    # print(f'err({ftype}):{err}')
+    return err

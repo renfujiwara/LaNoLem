@@ -23,6 +23,7 @@ import copy
 import collections
 import time
 import multiprocessing
+from sklearn.metrics import root_mean_squared_error as rmse
 #--------------#
 # ALL          #
 #--------------#
@@ -225,10 +226,11 @@ def RMSER(X,E):
     return errR
 
 def RMSE(A,B):
-    if(len(B)==0): B=0.0*A;
-    diff=A.flatten() - B.flatten()
-    np.size(B) == np.sum(np.isnan(B))
-    return np.sqrt(mynanmean(pow(diff, 2)))
+    if(len(B)==0): B=np.zeros_like(A);
+    # diff=A.flatten() - B.flatten()
+    # np.size(B) == np.sum(np.isnan(B))
+    return rmse(A, B)
+    # return np.sqrt(mynanmean(pow(diff, 2)))
 
 def RMSER_each(A,B):
     err=np.zeros(len(A))

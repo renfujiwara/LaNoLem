@@ -7,9 +7,9 @@ lstep=30
 #outdir="./result/forecast/mocap_86_01/"
 #lstep=100
 #--- google: social media
-#stream="./data/google/socialmedia_g_ma4"
-#outdir="./result/forecast/gt_socialmedia/"
-#lstep=13 #3month-ahead
+# stream="./data/google/socialmedia_g_ma4"
+# outdir="./result/forecast/gt_socialmedia/"
+# lstep=13 #3month-ahead
 
 mkdir -p $outdir
 echo "------------------"

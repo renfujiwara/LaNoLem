@@ -4,6 +4,7 @@ import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
+import model.tool as tl
 from model.utils import make_feature_names
 
 
@@ -118,3 +119,74 @@ def plot_result(model, data, setting, fsize=3.3):
     
     with open(f'{dir_path}/model.pickle', mode='wb') as f:
         pickle.dump(model, f)
+        
+
+#--------------------------------#
+def _plotResultsF(Snaps, outdir):
+    Xorg=Snaps['Xorg']
+    mn=np.nanmin(Xorg.flatten()); mx=np.nanmax(Xorg.flatten())
+    tl.plt.clf()
+    tl.plt.subplot(511)
+    tl.plt.plot(Xorg,) # 'black')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylim([mn, mx])
+    tl.plt.ylabel('Original')
+    tl.plt.xticks([])
+    tl.plt.subplot(512)
+    tl.plt.plot(Xorg, 'lightgrey')
+    tl.resetCol()
+    tl.plt.plot(Snaps['Vf_full']) 
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylim([mn, mx])
+    tl.plt.ylabel('Forecast')
+    tl.plt.xticks([])
+    tl.plt.subplot(513)
+    tl.plt.plot(Snaps['Es_full'], 'lightgrey')
+    tl.plt.plot(Snaps['Ef_full'], 'yellowgreen')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylabel('RMSE (cast)')
+    tl.plt.xticks([])
+    emx=np.nanmax(Snaps['Es_full'].flatten())
+    tl.plt.ylim([0,emx])
+    tl.plt.subplot(514)
+    tl.plt.semilogy(Snaps['T_full'], '.', color='yellowgreen')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylabel('Speed')
+    #tl.savefig("%sout_Vf"%(outdir),'pdf')
+    tl.savefig("%sout_Vf"%(outdir),'png')
+    tl.plt.close()
+
+#--------------------------------#
+def _plotResultsE(Snaps, outdir):
+    Xorg=Snaps['Xorg']
+    mn=np.nanmin(Xorg.flatten()); mx=np.nanmax(Xorg.flatten())
+    tl.plt.clf()
+    tl.plt.subplot(511)
+    tl.plt.plot(Xorg) #, 'black')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylim([mn, mx])
+    tl.plt.ylabel('Original')
+    tl.plt.xticks([])
+    tl.plt.subplot(512)
+    tl.plt.plot(Xorg, 'lightgrey')
+    tl.resetCol()
+    tl.plt.plot(Snaps['Ve_full']) #, 'royalblue')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylim([mn, mx])
+    tl.plt.ylabel('Est')
+    tl.plt.xticks([])
+    tl.plt.subplot(513)
+    tl.plt.plot(Snaps['Ee_full'], 'yellowgreen')
+    tl.plt.xlim([0,len(Xorg)])
+    emx=np.nanmax(Snaps['Es_full'].flatten())
+    tl.plt.ylim([0,emx])
+    tl.plt.ylabel('RMSE (est)')
+    tl.plt.xticks([])
+    tl.plt.subplot(514)
+    tl.plt.semilogy(Snaps['T_full'], '.', color='yellowgreen')
+    tl.plt.xlim([0,len(Xorg)])
+    tl.plt.ylabel('Speed')
+    #tl.savefig("%sout_Ve"%(outdir),'pdf')
+    tl.savefig("%sout_Ve"%(outdir),'png')
+    tl.plt.close()
+#--------------------------------#

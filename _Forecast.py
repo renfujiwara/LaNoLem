@@ -1,10 +1,19 @@
+import os
+os.environ["OPENBLAS_NUM_THREADS"]="1"
+os.environ["MKL_NUM_THREADS"]="1"
+os.environ["OMP_NUM_THREADS"]="1"
+os.environ["VECLIB_NUM_THREADS"]="1"
+os.environ["NUMEXPR_NUM_THREADS"]="1"
+os.environ["NUMBA_NUM_THREADS"]="1"
 import numpy as np
 import sys
 import model.tool as tl
 import time
 from numpy import linalg as la
+from model.make_plot import _plotResultsE, _plotResultsF
 from model.nlds import NLDS
 import argparse
+from model.lds import LDS
 
 
 DBG=tl.YES
@@ -14,7 +23,7 @@ MSAVE=tl.YES # save model.png (default: YES)
 TSAVE=tl.NO # save every time tick (default: NO)
 UPDATE_MDB=tl.YES    # update model DB or not (default: YES)
 # --- windows 
-RR_R=3         # lc=3*ls     --- len(Xc) current window length
+RR_R=3         # lc=2*ls     --- len(Xc) current window length
 LP_R=(1.0/5.0) # lp=ls*(1/5) --- sliding/reporting-window 
 # --- LMfit 
 W_RR='linear'  # weighted LMfit for RegimeReader (default: linear) 
@@ -26,14 +35,15 @@ RE_TH_R=0.5            # th of insertion  e.g., th=0.5*|Xc|
 RE_OVERLAP_LEN_R=(2.0/3.0) # it allows (1-xx)% overlap
 RE_SUBSEQ_LEN_R=(1.0/3.0)  # recursively try lenc*xx subseq
 RE_LMIN_R=2         # minimum length 2*lstep
-RE_RETRY_RR=tl.YES  # if you want to re-try regimereader after RE/insertion
+RE_RETRY_RR=tl.NO  # if you want to re-try regimereader after RE/insertion
 # --- RegimeReader
-RR_TH_R=0.8    # th of regimereader e.g., th=0.8*|Xc| 
+RR_TH_R=1.0    # th of regimereader e.g., th=0.8*|Xc| 
 ERR_MIN=0.1    # minimum error value for everything
 AVOIDINF_R=1.2 # _checkINF, ignore Ve if error(Vc-Xc) is too large
 # --- nested structure
 def _makeH_ma(lstep):
-    H_ma=[2*lstep,  1]
+    # H_ma=[2*lstep,  1]
+    H_ma=[1]
     return H_ma
 #------------------------------------------------#
 
@@ -63,16 +73,22 @@ def _regime_reader(Xc, lenc, lene, MDB):
     # if there is no regime in MDB, return 
     if(r==0): return (Wt, err_c, Ve, MDB)
     # (2) estimate opt event for each regime in MDB
-    (MDB, Ve_r, err_r)=_estimate_optRegimes(Xc, lene, MDB)
-    Vc_r=Ve_r[:,0:lenc,:] # Vc_r[r]: current estimated events for each regime 
+    # (MDB, Ve_r, err_r)=_estimate_optRegimes(Xc, lene, MDB)
+    (MDB, Ve, err)=_estimate_optRegimes(Xc, lene, MDB)
+    # Vc_r=Ve_r[:,0:lenc,:] # Vc_r[r]: current estimated events for each regime 
     # (3) compute regime-activity (strengthi/weight of each regime) 
-    Wt=_decompWt(Xc, Vc_r, r, d, lenc) 
+    # Wt=_decompWt(Xc, Vc_r, r, d, lenc) 
     # (4) create estimated event 
-    Ve=_mix_Ve_r(Ve_r, Ve, r, Wt)
+    # Ve=_mix_Ve_r(Ve_r, Ve, r, Wt)
     # (5) compute error (Xc-Vc) ... Vc=Ve[0:lenc]
-    err_c=tl.RMSE(Xc,Ve[0:lenc,:]); err_org=tl.RMSE(Xc,[])
+    try:
+        err_c=tl.RMSE(Xc,Ve[0:lenc,:]); 
+    except:
+        err_c=tl.INF    
+    # print(err_c)
+    err_org=tl.RMSE(Xc,[])
     # (6) if bad-fit, use current/latest event Xc[tm_ed]  
-    if(err_c>err_org*RR_TH_R and err_c>ERR_MIN ):   
+    if((err_c>err_org*RR_TH_R) and (err_c>ERR_MIN) ):   
         Ve[0:lene,:]= Xc[lenc-1,:]; err_c=tl.RMSE(Xc,Ve[0:lenc,:]); 
     return (Wt, err_c, Ve, MDB) 
 #-----------------------------#
@@ -84,20 +100,44 @@ def _regime_reader(Xc, lenc, lene, MDB):
 # estimate new regime, and insert it into MDB
 def _regime_estimator(Xc, MDB, fn, level, ma, lstep):
     # (0) if cannot get new regime, return org MDB
-    if(UPDATE_MDB==tl.NO or len(Xc)<lstep*RE_LMIN_R or len(MDB)>=MAXR): return MDB
+    if((UPDATE_MDB==tl.NO) or (len(Xc)<lstep*RE_LMIN_R) or (len(MDB)>=MAXR)): return MDB
     tl.msg("    |----RE: MDB(c=%d) n=%d (level:%d)"%(len(MDB), len(Xc), level))
     # (1) create new model mds 
-    mds=NLDS(num_works=1, lam_list=[1.0, 1e-1, 1e-2], init_cov_list=[1.0], tol=0.01,
+    mds=NLDS(num_works=4, l_lam=1.e-3, nl_lam=1.e+5, tol=1.0,
         fn="%s_mdb/H%d_r%d"%(fn,level, len(MDB)), ma=ma)
     # (2) estimate model params
-    mds=mds.fit(Xc, fit_type='Latent')
+    # best_err = tl.INF
+    # best_mds = tl.dcopy(mds)
+    # for k in range(2, Xc.shape[1]+1):
+    #     mds = mds.fit(Xc, k = k, max_iter=30, fit_type='Latent')
+    #     err = mds.err(Xc)
+    #     if err < best_err:
+    #         best_err = err
+    #         best_mds = tl.dcopy(mds)
     # if(MSAVE): mds.plot(mds.fn)
     # (3-a) generate and compute |Xc-Vc|
-    (Sta, Obs)=mds.gen(mds.n); err=tl.RMSE(Xc,Obs)
+    # mds = best_mds
+    mds = mds.fit(Xc, max_iter=30, fit_type='Latent')
+    try:
+        (Sta, Obs)=mds.gen(len(Xc)); 
+        err=tl.RMSE(Xc,Obs)
+        # print(f'err:{err}')
+        # (Sta, Obs)=mds.gen(len(Xc)+lstep); 
+        # if(_checkINF(Obs,Xc)):
+        #     lds = LDS(Xc, fn="%s_mdb/H%d_r%d"%(fn,level, len(MDB)), ma=ma)
+        #     lds = lds.fit(Xc, mds.obs_offset)
+        #     mds = tl.dcopy(lds)
+        #     (Sta, Obs)=mds.gen(len(Xc)); 
+        #     err=tl.RMSE(Xc,Obs)
+    except:
+        # mds = tl.dcopy(lds)
+        # (Sta, Obs)=mds.gen(mds.n); 
+        # err=tl.RMSE(Xc,Obs)
+        err = tl.INF
     # (3-b) compute original |Xc|
     err_org=tl.RMSE(Xc,[])
     # (4-a) if it cannot find good-fit, then re-insert subsequence Xc*RE_SUBSEQ_LEN_R 
-    if( err>ERR_MIN and err>err_org*RE_TH_R ): 
+    if( (err>ERR_MIN) and (err>err_org*RE_TH_R) ): 
         if(DBG): tl.msg("    ........ bad-fit:  |Xc|:%f, |Xc-Vc|:%f (err_r:%f>th=%f)"%(err_org, err, err/err_org,RE_TH_R))
         # split r%-subseq and try RegEst again (delete (RE_SUBSEQ_LEN_R)-head)
         n=len(Xc); ed=n-1; st=int(n*RE_SUBSEQ_LEN_R)-1
@@ -106,6 +146,7 @@ def _regime_estimator(Xc, MDB, fn, level, ma, lstep):
     else:
         tl.msg("    ........ insert Xc(n=%d) -> MDB(level=%d, c=%d)"%(len(Xc), level, len(MDB)))
         MDB.append(mds)
+    
     tl.msg("    |----RE : (END) ")
     return MDB
 #-----------------------------#
@@ -159,7 +200,8 @@ def _regime_cast(X, lstep, MDBH, fn):
     #------------------------------------------------------------#
     # Start RegimeCast
     #------------------------------------------------------------#
-    tf_ed=1 # start 
+    # tf_ed=1 # start 
+    tf_ed=lene
     while(True): 
         #------------------------------------------------------------#
         # set time ticks (tm_st, tm_ed, tf_st, tf_ed) 
@@ -169,7 +211,7 @@ def _regime_cast(X, lstep, MDBH, fn):
         tm_ed=tc           # tc
         tf_st=tc+lens      # ts
         tf_ed=tc+lens+lenp # te
-        if(tm_st<0): tf_ed=lene; continue; 
+        # if(tm_st<0): tf_ed=lene; continue; 
         #------------------------------------------------------------#
         tl.comment("RC: tc = %d"%(tm_ed))
         tl.msg("(tm, tc, ts, te) = (%d, %d, %d, %d)"%(tm_st, tm_ed, tf_st, tf_ed))
@@ -178,11 +220,11 @@ def _regime_cast(X, lstep, MDBH, fn):
         #------------------------------------------------------------#
         # initialize modelDB (if MDBH is null) - RegimeEstimator 
         #------------------------------------------------------------#
-        for i in range(0,HEIGHT):
-            if(len(MDBH[i])==0):
-                re_st=max(0,tm_ed-lene); re_ed=tm_ed; # insert X[re_st:re_ed] into modelDB
-                MDBH[i]=_regime_estimator(XH[i,re_st:re_ed,:], MDBH[i], fn, i, H_ma[i], lstep)
-                re_edH[i]=re_ed
+        i = 0
+        if(len(MDBH[i])==0):
+            re_st=max(0,tm_ed-lene); re_ed=tm_ed; # insert X[re_st:re_ed] into modelDB
+            MDBH[i]=_regime_estimator(XH[i,re_st:re_ed,:], MDBH[i], fn, i, H_ma[i], lstep)
+            re_edH[i]=re_ed
         #------------------------------------------------------------#
 
         #===================#
@@ -192,73 +234,71 @@ def _regime_cast(X, lstep, MDBH, fn):
         #===================#
         #------------------------------------------------------------#
         # nested structure 
+        #------------------------------------------------------------
         #------------------------------------------------------------#
-        for i in range(0,HEIGHT):
-            
+        # create Xci, i.e., current window at level i
+        #------------------------------------------------------------#
+        Xci=XH[i,tm_st:tm_ed,:] 
+        erri_org=tl.RMSE(Xci,[])
+        
+        #------------------------------------------------------------#
+        # RegimeReader
+        #------------------------------------------------------------#
+        (Wti_rr, erri_rr, Vei_rr, MDBH[i])=_regime_reader(Xci, lenc, lene, MDBH[i])
+        RSH[i,tf_st:tf_ed,0:len(MDBH[i])] = Wti_rr
+        tl.msg("|----RR-Level-%d (%d) err(Xc-Vc): %.4f"%(i, H_ma[i], erri_rr))
+        #------------------------------------------------------------#
+        
+        #------------------------------------------------------------#
+        # if it cannot find good regime in MDB
+        if(erri_rr>erri_org*RE_TH_R and erri_rr>ERR_MIN): 
+            #===================#
+            tic_i = time.process_time()
+            #===================#
             #------------------------------------------------------------#
-            # create Xci, i.e., current window at level i
+            # RegimeEstimator 
             #------------------------------------------------------------#
-            Xci=XH[i,tm_st:tm_ed,:] 
-            erri_org=tl.RMSE(Xci,[])
-            
-            #------------------------------------------------------------#
-            # RegimeReader
-            #------------------------------------------------------------#
-            (Wti_rr, erri_rr, Vei_rr, MDBH[i])=_regime_reader(Xci, lenc, lene, MDBH[i])
-            RSH[i,tf_st:tf_ed,0:len(MDBH[i])] = Wti_rr
-            tl.msg("|----RR-Level-%d (%d) err(Xc-Vc): %.4f"%(i, H_ma[i], erri_rr))
-            #------------------------------------------------------------#
-            
-            #------------------------------------------------------------#
-            # if it cannot find good regime in MDB
-            if(erri_rr>erri_org*RE_TH_R and erri_rr>ERR_MIN): 
-                #===================#
-                tic_i = time.process_time()
-                #===================#
+            re_st=max(0,tm_ed-lene); re_ed=tm_ed; # insert X[re_st:re_ed] into modelDB
+            re_overlap=lene*RE_OVERLAP_LEN_R; diff=re_st-(re_edH[i]-re_overlap)
+            if(re_edH[i]==-1 or diff>0): 
+                # if not overlapped window, then, insert it into MDB
+                MDBH[i]=_regime_estimator(XH[i,tm_st:tm_ed,:], MDBH[i], fn, i, H_ma[i], lstep)
+                re_edH[i]=re_ed # update latest insertion point
                 #------------------------------------------------------------#
-                # RegimeEstimator 
+                # RegimeReader -retry (optional)
                 #------------------------------------------------------------#
-                re_st=max(0,tm_ed-lene); re_ed=tm_ed; # insert X[re_st:re_ed] into modelDB
-                re_overlap=lene*RE_OVERLAP_LEN_R; diff=re_st-(re_edH[i]-re_overlap)
-                if(re_edH[i]==-1 or diff>0): 
-                    # if not overlapped window, then, insert it into MDB
-                    MDBH[i]=_regime_estimator(XH[i,re_st:re_ed,:], MDBH[i], fn, i, H_ma[i], lstep)
-                    re_edH[i]=re_ed # update latest insertion point
-                    #------------------------------------------------------------#
-                    # RegimeReader -retry (optional)
-                    #------------------------------------------------------------#
-                    if(RE_RETRY_RR):
-                        (Wti_rr, erri_rr, Vei_rr, MDBH[i])=_regime_reader(Xci, lenc, lene, MDBH[i])
-                        RSH[i,tf_st:tf_ed,0:len(MDBH[i])]=Wti_rr
-                        tl.msg("    |----RR(retry)-Level-%d (%d) err(Xc-Vc): %.4f"%(i, H_ma[i], erri_rr))
-                    #------------------------------------------------------------#
+                if(RE_RETRY_RR):
+                    (Wti_rr, erri_rr, Vei_rr, MDBH[i])=_regime_reader(Xci, lenc, lene, MDBH[i])
+                    RSH[i,tf_st:tf_ed,0:len(MDBH[i])]=Wti_rr
+                    tl.msg("    |----RR(retry)-Level-%d (%d) err(Xc-Vc): %.4f"%(i, H_ma[i], erri_rr))
                 #------------------------------------------------------------#
-                #===================#
-                toc_i = time.process_time(); re_time_i+= toc_i-tic_i;
-                #===================#
+            #------------------------------------------------------------#
+            #===================#
+            toc_i = time.process_time(); re_time_i+= toc_i-tic_i;
+            #===================#
 
-            #------------------------------------------------------------#
-            # update params at level i
-            #------------------------------------------------------------#
-            # model-fit
-            VeH_full[i,tm_st:tf_ed,:]=Vei_rr[0:lene,:]
-            # forecasted-seq
-            VfH_full[i,tf_st:tf_ed,:]=Vei_rr[(lene-lenp):lene,:]
-            #------------------------------------------------------------#
+        #------------------------------------------------------------#
+        # update params at level i
+        #------------------------------------------------------------#
+        # model-fit
+        VeH_full[i,tm_st:tf_ed,:]=Vei_rr[0:lene,:].copy()
+        # forecasted-seq
+        VfH_full[i,tf_st:tf_ed,:]=Vei_rr[(lene-lenp):lene,:].copy()
+        #------------------------------------------------------------#
         
         #------------------------------------------------#
         # compute global/smoothed events  
         #------------------------------------------------#
-        Ve_full[tm_st:tf_ed,:]=0; 
-        Vf_full[tf_st:tf_ed,:]=0;
-        for i in range(0,HEIGHT):
-            my_ma=max(lenp,H_ma[i])
-            my_tm_st=max(0,tm_st-my_ma)
-            my_tf_st=max(0,tf_st-my_ma)
-            VeH_tmp  = tl.smoothMAa(VeH_full[i, my_tm_st:tf_ed,:], my_ma)
-            VfH_tmp  = tl.smoothMAa(VfH_full[i, my_tf_st:tf_ed,:], my_ma)
-            Ve_full[tm_st:tf_ed,:] += VeH_tmp[len(VeH_tmp)-1-(tf_ed-tm_st):len(VeH_tmp)-1,:]
-            Vf_full[tf_st:tf_ed,:] += VfH_tmp[len(VfH_tmp)-1-(tf_ed-tf_st):len(VfH_tmp)-1,:]
+        Ve_full[tm_st:tf_ed,:]=VeH_full[0,tm_st:tf_ed,:].copy() 
+        Vf_full[tf_st:tf_ed,:]=VfH_full[0,tf_st:tf_ed,:].copy()
+        # for i in range(0,HEIGHT):
+        #     my_ma=max(lenp,H_ma[i])
+        #     my_tm_st=max(0,tm_st-my_ma)
+        #     my_tf_st=max(0,tf_st-my_ma)
+        #     VeH_tmp  = tl.smoothMAa(VeH_full[i, my_tm_st:tf_ed,:], my_ma)
+        #     VfH_tmp  = tl.smoothMAa(VfH_full[i, my_tf_st:tf_ed,:], my_ma)
+        #     Ve_full[tm_st:tf_ed,:] += VeH_tmp[len(VeH_tmp)-1-(tf_ed-tm_st):len(VeH_tmp)-1,:]
+        #     Vf_full[tf_st:tf_ed,:] += VfH_tmp[len(VfH_tmp)-1-(tf_ed-tf_st):len(VfH_tmp)-1,:]
         #------------------------------------------------#
         #===================#
         toc = time.process_time(); fittime= toc-tic
@@ -306,9 +346,14 @@ def _regime_cast(X, lstep, MDBH, fn):
         #------------------------------------------------#
         # terminate
         #------------------------------------------------#
-        if(tf_ed+lenp>=n): return; 
+        if(tf_ed+lenp>=n): break
         #------------------------------------------------#
-
+    Xsft=np.append(np.zeros((lstep+lenp,d)), X[:-lstep-lenp,:],axis=0) # shifted-Xorg (ls+lp)
+    Snaps={'Xorg': X, 'Ve_full':Ve_full, 'Vf_full':Vf_full, 'Ee_full':ERR_full[:,0], 'Ef_full':ERR_full[:,1], 'T_full':TIME_full[:,0]}
+    Snaps['Es_full']=tl.RMSE_each(Xsft, X)
+    _plotResultsE(Snaps, outdir)
+    _plotResultsF(Snaps, outdir)
+    return
 
 
 #-----------------------#
@@ -337,13 +382,13 @@ def _create_MDB(MDBH, lstep):
 #-----------------------------#
 # create hierarchical event stream X
 def _create_XH(X, H_ma, HEIGHT):
-    XH=[]; X_tmp=tl.dcopy(X)
+    XH=[X]; #X_tmp=tl.dcopy(X)
     # create smooth X
-    for i in range(0,HEIGHT):
-        h=H_ma[i]
-        X_h=tl.smoothMA(X_tmp, h)
-        XH.append(X_h)
-        X_tmp = X_tmp-X_h
+    # for i in range(0,HEIGHT):
+    #     h=H_ma[i]
+    #     X_h=tl.smoothMA(X_tmp, h)
+    #     XH.append(X_h)
+    #     X_tmp = X_tmp-X_h
     XH=np.asarray(XH)
     return XH
 #-----------------------------#
@@ -359,8 +404,10 @@ def _create_XH(X, H_ma, HEIGHT):
 # if Obs is too far from Xorg, then return True
 def _checkINF(Obs, Xorg):
     th=AVOIDINF_R
-    mx=max(abs(Xorg.flatten()))
-    if(sum(abs(Obs.flatten())>mx*th)>=1): return True
+    mx=np.max(np.abs(Xorg.flatten()))
+    
+    if(np.count_nonzero(np.abs(Obs.flatten())>mx*th)>=1): 
+        return True
     else: return False
 #------------------------------------------------#
 
@@ -429,17 +476,25 @@ def _estimate_optRegimes(Xc, lene, MDB):
     # (1) for each regime in MDB, estimate Ve_r[i] (i=1,...r)
     for i in range(0,r):
         mds=MDB[i]; mds.data=Xc;  # regime mds in MDB
-        mu0_org=tl.dcopy(mds.mu0)
-        mds.fit_mu0(Xc, W_RR, DPS)     # update init mu0 (i.e., s(0)=mu0)
-        (Sta,Obs)=mds.gen(lene)
-        err=tl.RMSE(Xc, Obs[0:len(Xc)])  # rmse(Xc-Vc)
-        # if err is too large, then, ignore this regime mds
-        if(_checkINF(Obs,Xc) or (err>ERR_MIN and err>err_org*RR_TH_R)): 
+        try:
+            mu0_org=tl.dcopy(mds.mu0)
+            # mds.mu0 = np.zeros_like(mu0_org)
+            mds = mds.fit_mu0(Xc, W_RR, DPS)     # update init mu0 (i.e., s(0)=mu0)
+            (Sta,Obs)=mds.gen(lene)
+            err = tl.RMSE(Xc, Obs[0:len(Xc)])  # rmse(Xc-Vc)
+            # print(f'{Obs[len(Xc):]}')
+            if(_checkINF(Obs,Xc) or ((err>ERR_MIN) and (err>err_org*RR_TH_R))): 
+                Obs[:]=0.0; err=tl.INF; mds.mu0=mu0_org;
+            # print(f'err:{err}')
+        except:
+            err=tl.INF
             Obs[:]=0.0; err=tl.INF; mds.mu0=mu0_org;
+        # if err is too large, then, ignore this regime mds
         # update Ve_r[i], err_r[i] 
         Ve_r.append(Obs); err_r.append(err)
+    best_i = np.nanargmin(err_r)
     Ve_r=np.asarray(Ve_r)
-    return (MDB, Ve_r, err_r)
+    return (MDB, Ve_r[best_i], err_r[best_i])
 #------------------------------------------------#
 
 if __name__ == "__main__":
