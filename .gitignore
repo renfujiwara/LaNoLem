@@ -164,3 +164,4 @@ log/
 result/
 data/
 model/__pycache__/
+fig/
