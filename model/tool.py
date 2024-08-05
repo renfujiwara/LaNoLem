@@ -432,3 +432,65 @@ def close_txt(fp):
     fp.close()
 
 
+def _plot(nlds, data, disp=False, nf=-1, fn=''):
+    if(nf==-1): nf=int(nlds.n)
+    (Sta, Obs)=nlds.gen(nf) 
+    (StaL,ObsL)=nlds.gen_lin(nf) 
+    err_o=RMSE(data,0*data)
+    err =RMSE(Obs[0:len(data),:],  data)
+    errL=RMSE(ObsL[0:len(data),:], data)
+
+    mn=np.nanmin(data.flatten())
+    mx=np.nanmax(data.flatten())
+    mnx=abs(mx-mn)
+    mx+=0.1*mnx; mn-=0.1*mnx
+    fig=figure(10)
+    #
+    plt.subplot(321)
+    resetCol()
+    plt.plot(data,'--', lw=1)
+    resetCol()
+    plt.plot(Obs, '-', lw=1)
+    plt.xlim([0,nf])
+    plt.ylim([mn,mx])
+    plt.title("Original vs. NLDS: err %.2f (%.2f)"%(err, err/err_o))
+    #
+    plt.subplot(322)
+    resetCol()
+    plt.plot(data,'--', lw=1)
+    resetCol()
+    plt.plot(ObsL,'-', lw=1)
+    plt.xlim([0,nf])
+    plt.ylim([mn,mx])
+    plt.title("Original vs. LDS: errL %.2f (%.2f)"%(errL, errL/err_o))
+    #
+    plt.subplot(323) 
+    plt.plot(Sta, '-', lw=1)
+    plt.xlim([0,nf])
+    plt.title("s(t) --- Sta (NLDS) k:%d"%(nlds.k))
+    #
+    plt.subplot(324) 
+    plt.plot(StaL, '-', lw=1)
+    plt.xlim([0,nf])
+    plt.title("s(t) --- Sta (LDS) k:%d"%(nlds.k))
+    #
+    plt.subplot(325) 
+    for i in range(0,len(Obs[0])):
+        plt.fill_between(range(0,len(Obs)), Obs[:,i]+2*err, Obs[:,i]-2*err, facecolor=[0.8,0.8,0.8], alpha=1.0, linewidth=0.0)
+    plt.plot(Obs, '-', lw=1)
+    plt.xlim([0,nf])
+    plt.ylim([mn,mx])
+    plt.title("v(t) --- Obs (NLDS)")
+    #
+    plt.subplot(326) 
+    for i in range(0,len(Obs[0])):
+        plt.fill_between(range(0,len(ObsL)), ObsL[:,i]+2*errL, ObsL[:,i]-2*errL, facecolor=[0.8,0.8,0.8], alpha=1.0, linewidth=0.0)
+    plt.plot(ObsL, '-', lw=1)
+    plt.xlim([0,nf])
+    plt.ylim([mn,mx])
+    plt.title("v(t) --- Obs (LDS)")
+    # 
+    if(fn!=''): plt.savefig(fn+'_nlds_fit.png')
+    plt.draw()
+    plt.show(block=disp)
+    if(disp!=True): plt.close()

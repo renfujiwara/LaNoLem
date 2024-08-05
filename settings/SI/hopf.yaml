@@ -2,10 +2,10 @@ data_name: 'hopf'
 noise_mean: 0.0
 noise_std: 1.0 
 random_state: 42
-num_steps: 3000 
+num_steps: 3000
 dt: 0.01
-init: [0.0, 0.1]
-u: 0.8
+init: [-1.0, 2.5]
+u: 0.15
 o: -1.0
 A: 1.0
 dim: 3

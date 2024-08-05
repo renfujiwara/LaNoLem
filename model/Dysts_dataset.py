@@ -1,11 +1,17 @@
-from dysts.base import make_trajectory_ensemble
-from dysts.base import get_attractor_list
+import os
+# from dysts.base import make_trajectory_ensemble
+# from dysts.base import get_attractor_list
 import dysts.flows as flows
-import dysts.datasets as datasets
+# import dysts.datasets as datasets
 import numpy as np
 import inspect
 from sympy import *
 from dysts.equation_utils import *
+from concurrent.futures import ProcessPoolExecutor
+import concurrent.futures
+import multiprocessing
+import itertools as it
+
 
 def sample_initial_conditions(model, points_to_sample, random_state, traj_length=1000, pts_per_period=30):
     
@@ -19,8 +25,29 @@ def sample_initial_conditions(model, points_to_sample, random_state, traj_length
     sample_pts = initial_sol[sample_inds]
     return sample_pts
 
+
+def _make_data(equation_name, dt, n, seed_list, noise_list):
+    data_each_noise = {noise_ratio: None for noise_ratio in noise_list}
+    for noise_ratio in noise_list:
+        data_each_seed = {seed: None for seed in seed_list}
+        data_no_noise = {seed: None for seed in seed_list}
+        for seed in seed_list:
+            eq = getattr(flows, equation_name)()
+            eq.dt = dt
+            eq.ic, _ = sample_initial_conditions(eq, 2, random_state=seed, traj_length=n, pts_per_period=30)
+            _, sol = eq.make_trajectory(n, method="Radau", resample=True, return_times=True, standardize=False)
+            rand = np.random.default_rng(seed=seed)
+            data_norm = np.linalg.norm(sol, ord='fro')
+            noise = rand.normal(0, 1.0, size=(sol.shape[0], sol.shape[1]))
+            noise_norm = np.linalg.norm(noise, ord='fro')
+            data_each_seed[seed] = sol + noise * (data_norm * noise_ratio) / noise_norm
+            data_no_noise[seed] = sol
+        data_each_noise[noise_ratio] = data_each_seed
+        data_each_noise[0] = data_no_noise
+    return data_each_noise
+
 def make_dysts_true_coefficients(systems_list, dimension_list, param_list):
-    true_coefficients = []
+    true_coefficients = {}
     for i, system in enumerate(systems_list):
         # print(i, system)
         if dimension_list[i] == 3:
@@ -279,7 +306,7 @@ def make_dysts_true_coefficients(systems_list, dimension_list, param_list):
             if len(chunk.replace(" ", "")) != 0:
                 coef_matrix_i[j, 0] = chunk.replace(" ", "")
 
-        true_coefficients.append(coef_matrix_i)
+        true_coefficients[system] = coef_matrix_i
     return true_coefficients
 
 
@@ -305,18 +332,65 @@ class Data:
         self.systems_list = np.array(systems_list)[alphabetical_sort]
         
         # # simplify attributes
-        dimension_list = []
-        param_list = []
-        
+        self.dimension_list = []
+        self.param_list = []
         for i, equation_name in enumerate(systems_list):
             eq = getattr(flows, equation_name)()
-            dimension_list.append(getattr(eq, 'embedding_dimension', None))
-            param_list.append(getattr(eq, 'parameters', None))
+            self.dimension_list.append(getattr(eq, 'embedding_dimension', None))
+            self.param_list.append(getattr(eq, 'parameters', None))
 
             
         self.true_coefficients = make_dysts_true_coefficients(systems_list, 
-                                                        dimension_list, 
-                                                        param_list)
+                                                        self.dimension_list, 
+                                                        self.param_list)
+        
+        self.poly_degree = {}
+        self.gt = {}
+        for i, equation_name in enumerate(systems_list):
+            coef = self.true_coefficients[equation_name]
+            dim = coef.shape[0]
+            num_quad = int(comb(2 + dim - 1, dim - 1))
+            num_cubic = int(comb(3 + dim - 1, dim - 1))
+            coeff_index = dim + 1 + num_quad + num_cubic
+            
+            if np.count_nonzero(coef[:, coeff_index:]) > 0:
+                self.poly_degree[equation_name] = 4
+                self.gt[equation_name] = coef[:, 1:].copy()
+                continue
+            
+            coeff_index = dim + 1 + num_quad
+            if np.count_nonzero(coef[:, coeff_index : coeff_index + num_cubic]) > 0:
+                self.poly_degree[equation_name] = 3
+                self.gt[equation_name] = coef[:, 1: coeff_index + num_cubic].copy()
+            else:
+                self.poly_degree[equation_name] = 2
+                self.gt[equation_name] = coef[:, 1: coeff_index].copy()
+            
+        
+    
+    def make_all_data(self, noise_list, seed_list, dt=0.01, n=500):
+        self.dt =dt
+        self.n = n
+        num_works = int(os.cpu_count()/3*2)
+        with ProcessPoolExecutor(max_workers=num_works, mp_context=multiprocessing.get_context('spawn')) as executor:
+            futures = {executor.submit(_make_data, equation_name, dt, n, seed_list, noise_list): equation_name for equation_name in self.systems_list}
+            i = 0
+            data_list={}
+            for future in concurrent.futures.as_completed(futures):
+                equation_name = futures[future]
+                data_list[equation_name] = future.result()
+                i += 1
+                
+        self.syn_data = data_list
+        
+        
+    def make_each_data(self, equation_name, noise_list, seed_list, dt=0.01, n=500):
+        self.dt = dt
+        self.n = n
+        if equation_name not in self.systems_list:
+            print('Name is nonexistent in system list')
+            return 
+        return _make_data(equation_name, dt, n, seed_list, noise_list)
         
         
     def get_len(self):
@@ -327,27 +401,43 @@ class Data:
         return self.systems_list[id]
     
     
-    def get_true_coefficients(self, id):
-        coef = self.true_coefficients[id]
+    def get_true_coefficients(self, equation_name):
+        coef = self.true_coefficients[equation_name]
+        
         return coef[:,1:]
-        
-    def get_data(self, id, random_state, noise_ratio = None):
-        dt = 0.01
-        n = 500
-        
-        dataset_name = self.systems_list[id]
-        eq = getattr(flows, dataset_name)()
+    
+    def make_data(self, equation_name, dt, n, seed):
+        eq = getattr(flows, equation_name)()
         eq.dt = dt
-        eq.ic, _ = sample_initial_conditions(eq, 2, random_state=random_state, traj_length=n, pts_per_period=30)
+        eq.ic, _ = sample_initial_conditions(eq, 2, random_state=seed, traj_length=n, pts_per_period=30)
         _, sol = eq.make_trajectory(n, method="Radau", resample=True, return_times=True, standardize=False)
+        return sol
         
-        if noise_ratio is None:
-            data = sol
-        else:
-            rand = np.random.default_rng(seed=random_state)
-            data_norm = np.linalg.norm(sol, ord='fro')
-            noise = rand.normal(0, 1.0, size=(sol.shape[0], sol.shape[1]))
-            noise_norm = np.linalg.norm(noise, ord='fro')
-            data = sol + noise * (data_norm * noise_ratio) / noise_norm
+    def get_data(self, equation_name, seed, noise_ratio):
+        return self.syn_data[equation_name][noise_ratio][seed], self.dt
+    
+    
+    
+    def make_setting(self, equation_name):
+        if equation_name not in self.systems_list:
+            print('Name is nonexistent in system list')
+            return
         
-        return data, dt
+        setting={'data_name':equation_name, 'num_step':self.n, 'dt':self.dt}
+        setting['xticklabels'] = self.make_feature_names(self.poly_degree[equation_name])
+        setting['yticklabels'] = setting['xticklabels'][:3]
+        setting['gt'] = self.gt[equation_name]
+        return setting
+        
+    def make_feature_names(self, dim):
+        features = ['x', 'y', 'z']
+        input_names = ['']
+        input_names += features
+        names = ['$x$', '$y$', '$z$']
+        sta = np.arange(4)
+        comb_list = np.array(list(it.combinations_with_replacement(sta,dim))[4:], dtype='i8')
+        for cmt in comb_list:
+            txt = [input_names[j] for j in cmt]
+            names.append(f"${''.join(txt)}$")
+        return names
+        

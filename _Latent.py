@@ -13,9 +13,9 @@ from model import NLDS, make_data, plot_result
 def main(args):
     dataset_name = args.dataset_name
     data, setting = make_data(dataset_name, latent=True, noise_ratio=0.0)
-    model = NLDS(num_works=args.num_works)
+    model = NLDS(verbose=False, num_works=args.num_works, print_log=True)
     model.random_state = 42
-    model = model.fit(data, fit_type='Latent')
+    model = model.fit(data, fit_type='Latent', fit_init=True)
     plot_result(model, data, setting, fsize=3.3)
     
             

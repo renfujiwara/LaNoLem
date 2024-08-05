@@ -8,7 +8,7 @@ import model.tool as tl
 from model.utils import make_feature_names
 
 
-def plot_result(model, data, setting, fsize=3.3):
+def plot_result(model, data, setting, fsize=3.3, missing = None):
     dataset_name = setting['data_name']
     if setting['xticklabels'] is None:
         xticklabels = make_feature_names(model.k, model.dim_poly)
@@ -28,6 +28,7 @@ def plot_result(model, data, setting, fsize=3.3):
     if model.fit_type == 'Latent':
         w = np.concatenate(((model.A - np.eye(model.k)), model.F), axis=1)/setting['dt']
     else:
+        
         w = np.concatenate((model.C @ (model.A - np.eye(model.k)), model.C @ model.F), axis=1)/setting['dt']
         
     if setting['gt'] is not None:
@@ -99,10 +100,18 @@ def plot_result(model, data, setting, fsize=3.3):
         plt.xlabel("State")
         plt.savefig(f"./{dir_path}/group.{fig_type}", bbox_inches='tight', pad_inches=0.1)
         
-    
     plt.rcParams["font.size"] = 28
     fig, ax = plt.subplots(figsize=(6.4,2.4))
-    ax.plot(data)
+    if missing is None:
+        ax.plot(data)
+    else:
+        data_miss = data.copy()
+        data_miss[missing] = np.nan
+        data_no_miss = data.copy()
+        data_no_miss[~missing] = np.nan
+        ax.plot(data_no_miss)
+        ax.plot(data_miss, linestyle='-', color='lightgray')
+    
     ax.set_xlabel("Time", fontsize=28)
     ax.set_ylabel("Value", fontsize=28)
     fig.savefig(f"{dir_path}/org.{fig_type}", bbox_inches='tight', pad_inches=0.1)

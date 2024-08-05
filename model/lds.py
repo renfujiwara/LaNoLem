@@ -30,24 +30,24 @@ def update_Q0(Ez, Ezz, covariance_type = "diag"):
 
 
 def update_A(Ez1z, Ezz):
-    return np.dot(np.sum(Ez1z, axis=0), inv(np.sum(Ezz[:-1], axis=0)))
+    return np.dot(np.sum(Ez1z, axis=0), inv(np.sum(Ezz, axis=0)))
 
 
 def update_C(Szz, Sxz):
     return np.dot(Sxz, inv(Szz))
 
 
-def update_b(Ez, A):
-    return np.mean(Ez[1:] - Ez[:-1] @ A.T, axis=0)
+def update_b(y, x, A):
+    return np.mean(y - x @ A.T, axis=0)
 
 
-def update_d(data, Ez, C):
-    return np.mean(data - Ez @ C.T, axis=0)
+def update_d(y, x, C):
+    return np.mean(y - x @ C.T, axis=0)
 
 
-def update_Q(Ez, Szz, Ezz, Ez1z, A, b, covariance_type):
+def update_Q(Ez, Ez1, Szz, Ezz, Ez1z, A, b, covariance_type):
     Sz1z = np.sum(Ez1z, axis=0)
-    val = A @ (Sz1z.T - np.einsum('ij,l->jl',  Ez[:-1], b)) + np.einsum('ij,l->jl',  Ez[1:], b)
+    val = A @ (Sz1z.T - np.einsum('ij,l->jl',  Ez, b)) + np.einsum('ij,l->jl',  Ez1, b)
     Q = Szz - Ezz[0] - val - val.T + A @ Sz1z @ A.T + np.outer(b, b)
     if covariance_type == "diag":
         return np.diag(np.diag(Q))/(len(Ez)-1)
@@ -64,27 +64,23 @@ def update_R(data, Ez, Sxx, Szz, Sxz, C, d, covariance_type):
         return R/len(data)
 
 
-def fit_each(model_org, data, max_iter):
-    model = deepcopy(model_org)
-    result = {"md":None, "err":None, "loss":None}
-    
+def fit_each(model, data, missing, max_iter):
+    model = deepcopy(model)
     model.init_params(data)
-    model, llh = model.initialize(data)
+    model, llh = model.initialize(data, missing)
     model.iter = 0
     history_llh = [llh]
     conv = 'max'
-    Sxx = data.T @ data
+    Sxx = data[missing].T @ data[missing]
     
-    best_model = deepcopy(model)
     for iteration in range(max_iter):
         model.iter = iteration
         try:
         # inference-step
-            model.forward(data)
+            model.forward(data, missing)
             model.backward()
-            
             # learning-step
-            model.solve(data, Sxx)
+            model.solve(data, missing, Sxx)
 
             loss = model.score(data)
             model.loss = loss
@@ -95,38 +91,36 @@ def fit_each(model_org, data, max_iter):
         
         history_llh.append(llh)
         
-        if history_llh[-1] < history_llh[-2]:
+        if history_llh[-1] > history_llh[-2]:
             conv = 'conv1'
             break
-        else:
-            best_model = deepcopy(model)
             
-    model = best_model
     model.conv = conv
     return model
 
 
 @njit(cache=True)
-def _filter(mu_t, data, P, C, R, d, Ih):
+def _filter(mu_t, data, missing, P, C, R, d, Ih):
     sgm = C @ P @ C.T + R     
     inv_sgm = inv(sgm)
     K = P @ C.T @ inv_sgm
     mu_o = C @ mu_t + d 
-    dlt = data - mu_o
-    
-    mu = mu_t + K @ dlt
+    if missing:
+        dlt = data - mu_o
+        mu = mu_t + K @ dlt
+        sign, logdet = np.linalg.slogdet(inv_sgm)
+        llh = sign * logdet * 0.5 - dlt @ inv_sgm @ dlt * 0.5 - 0.5 * len(d) * np.log(2 * np.pi)
+    else:
+        mu = mu_t.copy()
+        llh = 0
     K_hat = (Ih - K @ C)
     V = K_hat @ P @ K_hat.T + K @ R @ K.T
-    df = dlt @ inv_sgm @ dlt * 0.5
-    sign, logdet = np.linalg.slogdet(inv_sgm)
-    llh = -0.5 * len(d) * np.log(2 * np.pi)
-    llh += sign * logdet * 0.5 - df
     
     return mu, mu_o, sgm, V, llh
 
 
 @njit(cache=True)
-def _forward(data, mu0, A, b, Q, Q0, C, R, d, k):
+def _forward(data, missing, mu0, A, b, Q, Q0, C, R, d, k):
     n, dim_data = data.shape
     Ih = np.eye(k)
     mu = np.empty((n, k))
@@ -137,12 +131,12 @@ def _forward(data, mu0, A, b, Q, Q0, C, R, d, k):
     P = np.zeros((n, k, k))
     
     mu_t[0] = mu0.copy()
-    mu[0], mu_o[0], sgm[0], V[0], llh = _filter(mu0, data[0], Q0, C, R, d, Ih)
+    mu[0], mu_o[0], sgm[0], V[0], llh = _filter(mu0, data[0], missing[0], Q0, C, R, d, Ih)
     
     for t in range(1, len(data)):
         mu_t[t] = A @ mu[t-1] + b
         P[t-1] = A @ V[t - 1] @ A.T + Q
-        mu[t], mu_o[t], sgm[t], V[t], llh_t = _filter(mu_t[t], data[t], P[t-1], C, R, d, Ih)
+        mu[t], mu_o[t], sgm[t], V[t], llh_t = _filter(mu_t[t], data[t], missing[t], P[t-1], C, R, d, Ih)
         llh += llh_t
         
     return mu, mu_t, mu_o, sgm, V, P, llh
@@ -159,9 +153,9 @@ def _backward(mu, mu_t, V, P, A, k):
     Ez[-1] = mu[-1].copy()
     Ezz[-1] = Vhat + np.outer(Ez[-1], Ez[-1])
     for t in range(n - 2, -1, -1):
-        J = V[t] @ A[t].T @ inv(P[t])
+        J = V[t] @ A.T @ inv(P[t])
         Ez[t] = mu[t] + J @ (Ez[t+1] - mu_t[t+1])
-        Ez1z[t] = Vhat @ J.T + np.outer(Ez[t + 1], Ez[t])
+        Ez1z[t] = J @ Vhat + np.outer(Ez[t + 1], Ez[t])
         Vhat = V[t] + J @ (Vhat - P[t]) @ J.T
         Ezz[t] = Vhat + np.outer(Ez[t], Ez[t])
     
@@ -169,7 +163,7 @@ def _backward(mu, mu_t, V, P, A, k):
 
 
 class LDS:
-    def __init__(self, data, fn, ma, init_state_cov = "full", trans_cov = "full", obs_cov = "full",
+    def __init__(self, init_state_cov = "full", trans_cov = "full", obs_cov = "full",
                  print_log = False, verbose=False, random_state = 42):
         
         self.init_state_cov = init_state_cov
@@ -178,8 +172,6 @@ class LDS:
         self.print_log = print_log
         self.verbose = verbose
         self.random_state = random_state
-        self.fn = fn
-        self.ma = ma
     
     def init_params(self, data):
         k = self.k
@@ -203,17 +195,23 @@ class LDS:
         self.history_llh = []
         
     
-    def initialize(self, data):
+    def initialize(self, data, missing):
         self.n, self.dim_data = np.shape(data)
-        self.loss = self.score(data)
-        llh = self.llh
+        llh = self.score(data)
+        self.llh = llh
+        missing_r = np.roll(missing, 1)
+        missing_l = np.roll(missing, -1)
+        self.missing_z1 = np.logical_and(missing_r, missing)
+        self.missing_z1[0] = False
+        self.missing_z = np.logical_and(missing_l, missing)
+        self.missing_z[-1] = False
 
         return self, llh
     
     
 
-    def forward(self, data):
-        self.mu, self.mu_t, self.mu_o, self.sgm, self.V, self.P, self.llh = _forward(data, self.mu0, self.A, self.b, self.Q, 
+    def forward(self, data, missing):
+        self.mu, self.mu_t, self.mu_o, self.sgm, self.V, self.P, self.llh = _forward(data, missing, self.mu0, self.A, self.b, self.Q, 
                                                                                      self.Q0, self.C, self.R, self.d, self.k)
             
         
@@ -222,26 +220,27 @@ class LDS:
         
 
 
-    def solve(self, data, Sxx):
+    def solve(self, data, missing, Sxx):
+        missing_z1 = self.missing_z1
+        missing_z = self.missing_z
         Ez = self.Ez
         Ezz = self.Ezz
-        Sxz = np.einsum('ij,il->jl', data, self.Ez)
-        Szz = np.sum(Ezz, axis=0)
+        Sxz = data[missing].T @ self.Ez[missing]
+        Szz = np.sum(Ezz[missing], axis=0)
 
         # Initial zte mean/covariance
         self.mu0 = Ez[0].copy() 
         self.Q0 = update_Q0(Ez, Ezz, self.init_state_cov)
         
-        self.A = update_A(self.Ez1z, Ezz)
-        
+        self.A = update_A(self.Ez1z[missing_z1], Ezz[missing_z])
         self.C = update_C(Szz, Sxz)
         
-        self.b = update_b(Ez, self.A)
+        self.b = update_b(Ez[missing_z1], Ez[missing_z], self.A)
         if(self.obs_offset):
-            self.d = update_d(data, Ez, self.C)
+            self.d = update_d(data[missing], Ez[missing], self.C)
         
-        self.R = update_R(data, Ez, Sxx, Szz, Sxz, self.C, self.d, self.obs_cov)
-        self.Q = update_Q(Ez, Szz, Ezz, self.Ez1z, self.A, self.b, self.trans_cov)
+        self.R = update_R(data, Ez[missing], Sxx, Szz, Sxz, self.C, self.d, self.obs_cov)
+        self.Q = update_Q(Ez[missing_z], Ez[missing_z1], Szz, Ezz[missing_z], self.Ez1z[missing_z1], self.A, self.b, self.trans_cov)
     
     
     def print_params(self):
@@ -272,7 +271,7 @@ class LDS:
             return INF
             
             
-    def fit(self, x, obs_offset, k = None, max_iter=30):
+    def fit(self, x, missing, obs_offset, k = None, max_iter=30):
         data = x
         self.obs_offset = obs_offset
         self.n, dim_data = data.shape
@@ -281,7 +280,7 @@ class LDS:
             self.k = dim_data
         else:
             self.k = k
-        return fit_each(self, data, max_iter)
+        return fit_each(self, data, missing, max_iter)
     
     
     def score(self, data, llh=None):
