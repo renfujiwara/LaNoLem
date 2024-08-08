@@ -7,10 +7,10 @@ num_works=-1
 
 today=$(date "+%Y%m%d")
 mkdir -p ./log/si/${today}
-rtype='Lasso'
+# rtype='Lasso'
 # rtype='Naive'
 # rtype='Ridge'
-# rtype='normal'
+rtype='normal'
 
 # rtype='MIOSR'
 # rtype='SSR'

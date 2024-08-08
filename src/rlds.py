@@ -1,11 +1,12 @@
 from copy import deepcopy
 
 import numpy as np
-from numpy.linalg import inv
+from numpy.linalg import inv, cholesky
 from sklearn.metrics import mean_squared_error as mse
+from .utils import *
 
 from numba import njit
-from .utils import nl_fit
+from numpy.linalg import svd
 
 INF = 1.e+10
 
@@ -28,9 +29,33 @@ def update_Q0(Ez, Ezz, covariance_type = "diag"):
     else:
         return Q0
 
+@njit(cache=True)
+def _f(params, Q_chol_inv, y, z, lam):
+    _, sig, _ = svd(params)
+    return np.sum(np.square(Q_chol_inv @ (y - z @ params.T).T))/2 + lam * np.sum(sig) + l2(lam/2, params)  
 
-def update_A(Ez1z, Ezz):
-    return np.dot(np.sum(Ez1z, axis=0), inv(np.sum(Ezz, axis=0)))
+
+@njit(cache=True)
+def update_A(y, z, Ez1z, Ezz, Q, lam, k):
+    Q_chol_inv = inv(cholesky(Q + 1.e-10 * np.eye(Q.shape[0])))
+    Q_inv = Q_chol_inv.T @ Q_chol_inv
+    Szz = np.sum(Ezz, axis=0)
+    Sz1z = np.sum(Ez1z, axis=0)
+    params = Sz1z @ inv(Szz)
+    params_p = params.copy()
+    l_k = np.sqrt(np.sum(np.power(Q_inv, 2)) * np.sum(np.power(Szz, 2))) + lam
+    f_p = _f(params_p, Q_chol_inv, y, z, lam)
+    for iter in range(1000):
+        grad =   Q_inv @ (params_p @ Szz - Sz1z) + lam * params_p
+        params = params_p - grad/l_k
+        u, sig, v = svd(params)
+        params = np.dot(u, np.dot(np.diag(sig - lam/l_k), v))
+        f = _f(params, Q_chol_inv, y, z, lam)
+        conv2 = abs(f - f_p)
+        if (conv2 < 1.e-10):
+            break
+        params_p = params.copy()
+    return params
 
 
 def update_C(Szz, Sxz):
@@ -47,8 +72,8 @@ def update_d(y, x, C):
 
 def update_Q(Ez, Ez1, Szz, Ezz, Ez1z, A, b, covariance_type):
     Sz1z = np.sum(Ez1z, axis=0)
-    val = A @ (Sz1z.T - np.einsum('ij,l->jl',  Ez, b)) + np.einsum('ij,l->jl',  Ez1, b)
-    Q = Szz - Ezz[0] - val - val.T + A @ Sz1z @ A.T + np.outer(b, b)
+    val = A @ (Sz1z.T - np.einsum('ij,l->lj',  Ez, b)) + np.einsum('ij,l->lj',  Ez1, b)
+    Q = Szz - val - val.T + A @ Szz @ A.T + np.outer(b, b)
     if covariance_type == "diag":
         return np.diag(np.diag(Q))/(len(Ez)-1)
     else:
@@ -56,7 +81,7 @@ def update_Q(Ez, Ez1, Szz, Ezz, Ez1z, A, b, covariance_type):
 
 
 def update_R(data, Ez, Sxx, Szz, Sxz, C, d, covariance_type):
-    val = C @ (Sxz.T - np.einsum('ij,l->jl',  Ez, d)) + np.einsum('ij,l->jl',  data, d)
+    val = C @ (Sxz.T - np.einsum('ij,l->lj',  Ez, d)) + np.einsum('ij,l->lj',  data, d)
     R = Sxx - val - val.T + C @ Szz @ C.T + np.outer(d, d)
     if covariance_type == "diag":
         return np.diag(np.diag(R))/len(data)
@@ -64,37 +89,36 @@ def update_R(data, Ez, Sxx, Szz, Sxz, C, d, covariance_type):
         return R/len(data)
 
 
-def fit_each(model, data, missing, max_iter):
-    model = deepcopy(model)
+def fit_each(model_org, data, missing, lam, max_iter):
+    model = deepcopy(model_org)
+    model.lam = lam
     model.init_params(data)
     model, llh = model.initialize(data, missing)
     model.iter = 0
-    history_llh = [llh]
+    history_loss = [INF]
     conv = 'max'
     Sxx = data[missing].T @ data[missing]
-    
     for iteration in range(max_iter):
         model.iter = iteration
-        try:
+        # try:
         # inference-step
-            model.forward(data, missing)
-            model.backward()
-            # learning-step
-            model.solve(data, missing, Sxx)
+        model.forward(data, missing)
+        model.backward()
+        # learning-step
+        model.solve(data, missing, Sxx)
 
-            loss = model.score(data)
-            model.loss = loss
-            llh = model.llh
-        except (np.linalg.LinAlgError, FloatingPointError):
-            conv = 'except'
-            break
+        loss = model.score(data)
+        model.loss = loss
+        # llh = model.llh
+        # except (np.linalg.LinAlgError, FloatingPointError):
+        #     conv = 'except'
+        #     break
         
-        history_llh.append(llh)
+        history_loss.append(loss)
         
-        if history_llh[-1] > history_llh[-2]:
+        if history_loss[-1] > history_loss[-2]:
             conv = 'conv1'
             break
-            
     model.conv = conv
     return model
 
@@ -155,7 +179,7 @@ def _backward(mu, mu_t, V, P, A, k):
     for t in range(n - 2, -1, -1):
         J = V[t] @ A.T @ inv(P[t])
         Ez[t] = mu[t] + J @ (Ez[t+1] - mu_t[t+1])
-        Ez1z[t] = J @ Vhat + np.outer(Ez[t + 1], Ez[t])
+        Ez1z[t] = Vhat @ J.T + np.outer(Ez[t + 1], Ez[t])
         Vhat = V[t] + J @ (Vhat - P[t]) @ J.T
         Ezz[t] = Vhat + np.outer(Ez[t], Ez[t])
     
@@ -176,15 +200,8 @@ class LDS:
     def init_params(self, data):
         k = self.k
         dim_data = self.dim_data
-        # rand = np.random.default_rng(self.random_state)
         self.C = np.eye(dim_data, k) #+ rand.normal(0, 1, size=(dim_data, k))
         self.mu0 = np.zeros(k)
-            # else:
-            #     u, sig, v = np.linalg.svd(data, full_matrices=False)
-            #     self.C = v[:k].T
-            #     data_s = u[:,:dim_data] @ np.diag(sig)
-            #     self.mu0 = data_s[0, :k]
-                
         self.A = np.eye(k)
         self.Q0 = np.eye(k)
         self.Q = np.eye(k)
@@ -232,15 +249,16 @@ class LDS:
         self.mu0 = Ez[0].copy() 
         self.Q0 = update_Q0(Ez, Ezz, self.init_state_cov)
         
-        self.A = update_A(self.Ez1z[missing_z1], Ezz[missing_z])
+        self.A = update_A(Ez[missing_z1], Ez[missing_z], self.Ez1z[missing_z1], Ezz[missing_z], 
+                          self.Q, self.lam, self.k)
         self.C = update_C(Szz, Sxz)
         
         self.b = update_b(Ez[missing_z1], Ez[missing_z], self.A)
-        if(self.obs_offset):
-            self.d = update_d(data[missing], Ez[missing], self.C)
+        self.d = update_d(data[missing], Ez[missing], self.C)
         
         self.R = update_R(data, Ez[missing], Sxx, Szz, Sxz, self.C, self.d, self.obs_cov)
-        self.Q = update_Q(Ez[missing_z], Ez[missing_z1], Szz, Ezz[missing_z], self.Ez1z[missing_z1], self.A, self.b, self.trans_cov)
+        self.Q = update_Q(Ez[missing_z], Ez[missing_z1], np.sum(Ezz[missing_z1], axis=0), Ezz[missing_z], self.Ez1z[missing_z1], 
+                          self.A, self.b, self.trans_cov)
     
     
     def print_params(self):
@@ -263,6 +281,16 @@ class LDS:
         return self.llh
     
     
+    def score(self, data, llh=None):
+        if llh is None:
+            try:
+                llh = self.loglikelihood(data)
+            except:
+                llh = -INF
+        _, sig, _ = svd(self.A)
+        return - llh + self.lam * np.sum(sig) + l2(self.lam/2, self.A) 
+    
+    
     def err(self, data):
         try:
             _, Obs = self.gen()
@@ -271,28 +299,24 @@ class LDS:
             return INF
             
             
-    def fit(self, x, missing, obs_offset, k = None, max_iter=30):
+    def fit(self, x, missing, lams = [0.0, 1.0, 5.0, 1e+1, 5e+1, 1e+2, 5e+2, 1e+3],
+            k = None, max_iter=30):
         data = x
-        self.obs_offset = obs_offset
         self.n, dim_data = data.shape
         self.dim_data = dim_data
         if k is None: 
             self.k = dim_data
         else:
             self.k = k
-        return fit_each(self, data, missing, max_iter)
-    
-    
-    def score(self, data, llh=None):
-        if llh is None:
-            try:
-                llh = self.loglikelihood(data)
-            except:
-                llh = -INF
-        return - llh
-    
-    def fit_mu0(self, data, wtype='uniform', dps=1):
-        return nl_fit(self, data, "si", True)
+        
+        best_llh = - INF
+        best_model = deepcopy(self)
+        for lam in lams:
+            model = fit_each(self, data, missing, lam, max_iter)
+            if model.llh > best_llh:
+                best_model = deepcopy(model)
+                best_llh = model.llh
+        return best_model
     
     
     def gen(self, n=None, mu0=None):

@@ -10,19 +10,19 @@ os.environ["NUMBA_NUM_THREADS"]="1"
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_squared_error as mse
-from model.Dysts_dataset import Data
+from src.Dysts_dataset import Data
 from concurrent.futures import ProcessPoolExecutor
 import concurrent.futures
 import multiprocessing
 
-from model import NLDS, utils
+from src import LaNoLem, utils
 
 noise_list=[0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
 seed_list=[1,19,42,1024,3407]
 
 
 def _iter_LaNoLem(model, data, data_test, y, gt, gt_n,  equation_name, dt, noise_ratio, seed, name, l1_r, l2_r):
-    model = NLDS(verbose=False, num_works=1)
+    model = LaNoLem(verbose=False, num_works=1)
     model = model.fit(data, fit_type='Robust', l1_r=l1_r, l2_r=l2_r)
     w = np.concatenate((model.C @ (model.A - np.eye(model.k)), model.C @ model.F), axis=1)
     w_aug = np.zeros_like(gt)
@@ -43,7 +43,7 @@ def _iter(dataset, coef, equation_name, dt, name, l1_r, l2_r):
     _, j = np.shape(coef)
     gt[:,:j] = coef.copy()
     gt_n = np.linalg.norm(gt, ord='fro')
-    model = NLDS(verbose=False, num_works=1)
+    model = LaNoLem(verbose=False, num_works=1)
     return [_iter_LaNoLem(model, dataset[noise_ratio][seed][:500], dataset[noise_ratio][seed][499:], dataset[0][seed][499:], gt, gt_n, 
                           equation_name, dt, noise_ratio, seed, name, l1_r, l2_r) for noise_ratio in noise_list for seed in seed_list]
     
@@ -80,7 +80,7 @@ def evaluate(args):
         for future in concurrent.futures.as_completed(futures):
             data_name = futures[future]
             result.extend(future.result())
-            print(f'-----------\n{data_name}({i}/{l}) end\n-----------', flush=True)
+            print(f'-----------\n{data_name}({i+1}/{l}) end\n-----------', flush=True)
             i += 1
     
     lanolem_df = pd.DataFrame(result)

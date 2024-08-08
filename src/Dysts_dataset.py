@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 import concurrent.futures
 import multiprocessing
 import itertools as it
+from sklearn.preprocessing import PolynomialFeatures
 
 
 def sample_initial_conditions(model, points_to_sample, random_state, traj_length=1000, pts_per_period=30):
@@ -332,16 +333,19 @@ class Data:
         self.systems_list = np.array(systems_list)[alphabetical_sort]
         
         # # simplify attributes
-        self.dimension_list = []
+        dimension_list = []
         self.param_list = []
+        self.dimensions = {}
         for i, equation_name in enumerate(systems_list):
             eq = getattr(flows, equation_name)()
-            self.dimension_list.append(getattr(eq, 'embedding_dimension', None))
+            dim = getattr(eq, 'embedding_dimension', None)
+            dimension_list.append(dim)
+            self.dimensions[equation_name] = dim
             self.param_list.append(getattr(eq, 'parameters', None))
 
             
         self.true_coefficients = make_dysts_true_coefficients(systems_list, 
-                                                        self.dimension_list, 
+                                                        dimension_list, 
                                                         self.param_list)
         
         self.poly_degree = {}
@@ -402,9 +406,7 @@ class Data:
     
     
     def get_true_coefficients(self, equation_name):
-        coef = self.true_coefficients[equation_name]
-        
-        return coef[:,1:]
+        return self.gt[equation_name]
     
     def make_data(self, equation_name, dt, n, seed):
         eq = getattr(flows, equation_name)()
@@ -424,20 +426,19 @@ class Data:
             return
         
         setting={'data_name':equation_name, 'num_step':self.n, 'dt':self.dt}
-        setting['xticklabels'] = self.make_feature_names(self.poly_degree[equation_name])
+        setting['xticklabels'] = self.make_feature_names(equation_name, self.poly_degree[equation_name])
         setting['yticklabels'] = setting['xticklabels'][:3]
         setting['gt'] = self.gt[equation_name]
         return setting
         
-    def make_feature_names(self, dim):
-        features = ['x', 'y', 'z']
-        input_names = ['']
-        input_names += features
-        names = ['$x$', '$y$', '$z$']
-        sta = np.arange(4)
-        comb_list = np.array(list(it.combinations_with_replacement(sta,dim))[4:], dtype='i8')
-        for cmt in comb_list:
-            txt = [input_names[j] for j in cmt]
-            names.append(f"${''.join(txt)}$")
-        return names
+    def make_feature_names(self, equation_name, dim):
+        poly = PolynomialFeatures(degree=dim, include_bias=False)
+        if self.dimensions[equation_name] == 3:
+            features = ['x', 'y', 'z']
+            poly.fit(np.zeros((1,3)))
+        elif self.dimensions[equation_name] == 4:
+            features = ['x_0', 'x_1', 'x_2', 'x_3']
+            poly.fit(np.zeros((1,4)))
+        names = poly.get_feature_names_out(features) 
+        return ['$' + s + '$' for s in names]
         

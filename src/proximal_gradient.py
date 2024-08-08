@@ -1,7 +1,7 @@
 import numpy as np
 from numpy.linalg import cholesky, inv
 from numba import njit
-from model.utils import l1, l2
+from src.utils import l1, l2
 
 ZERO = 1.e-10
 
@@ -56,12 +56,15 @@ def _iter(y, z, snl, s1nl, Q_chol_inv, Q_inv, init, Qbz, l_k, l1_lam, l2_lam, k,
 
 
 class PG:
-    def __init__(self, ptol, l1_lam, l2_lam, sparse, max_iter=1000):
+    def __init__(self, ptol, l1_lam, l2_lam, max_iter=1000):
         self.ptol = ptol
         self.l1_lam = l1_lam
         self.l2_lam = l2_lam
         self.l2_lam_step = l2_lam*2
-        self.sparse = sparse
+        if l1_lam == 0:
+            self.sparse = False
+        else:
+            self.sparse = True
         self.max_iter = max_iter
         
 

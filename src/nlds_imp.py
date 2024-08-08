@@ -103,10 +103,6 @@ def fit_each(model_org, data, missing, max_iter, hyper_param, dim_list = None, r
     Models = []
     Sxx = data[missing].T @ data[missing]
     Results = []
-    if model_org.l1_r == 0:
-        sparse = False
-    else:
-        sparse = True
     for dim_poly in dim_list:
         model = deepcopy(model_org)
         model.k = hyper_param[0]
@@ -117,7 +113,7 @@ def fit_each(model_org, data, missing, max_iter, hyper_param, dim_list = None, r
         model.dim_poly = dim_poly
         model.init_params(data)
         model = model.initialize(data, missing)
-        gd_method = PG(ptol = model.ptol, l1_lam = model.l1_lam, l2_lam = model.l2_lam, sparse = sparse)
+        gd_method = PG(ptol = model.ptol, l1_lam = model.l1_lam, l2_lam = model.l2_lam)
         history_loss =[INF]
         
         model_d = deepcopy(model)
@@ -125,6 +121,7 @@ def fit_each(model_org, data, missing, max_iter, hyper_param, dim_list = None, r
         ascent = 0
         
         for iteration in range(max_iter):
+            model.iter = iteration
             try:
                 # inference-step
                 model.forward(data, missing)
@@ -277,7 +274,7 @@ def _backward(mu, mu_t, V, Phat, A_nl, ks, k_d2, k_d3, k, k_nl, j_delta, comb_li
     for t in range(n - 2, -1, -1):
         J = V[t] @ A_nl[t].T @ pinv(Phat[t+1])
         Ez[t] = mu[t] + J @ (Ez[t+1] - mu_t[t+1])
-        Ez1z[t] = J @ P + np.outer(Ez[t + 1], Ez[t])
+        Ez1z[t] = P @ J.T + np.outer(Ez[t + 1], Ez[t])
         P = V[t] + J @ (P - Phat[t+1]) @ J.T
         Ezz[t], Eznl[t] = moment(Ez[t], P, k, ks, k_d2, k_d3, k_nl)
         j_m[t] = diff_m(Ez[t], j_delta, k_nl, comb_list)
@@ -317,7 +314,7 @@ class NLDS:
             self.b = np.zeros(k)
             self.d = np.zeros(dim_data)
             self.Q = np.eye(k)
-            self.Q0 = np.eye(k) * 1e+7 
+            self.Q0 = np.eye(k)
             self.R = np.eye(dim_data)
             self.MAX_ASCENT = 5 
         else:
@@ -331,9 +328,9 @@ class NLDS:
             self.F = np.zeros((k,k_nl))
             self.b = np.zeros(k)
             self.d = np.zeros(dim_data)
-            self.Q = np.eye(k) * 1.e-2
-            self.Q0 = np.eye(k) * 1.e-2
-            self.R = np.eye(dim_data) * 1.e-2
+            self.Q = np.eye(k) #* 1.e-2
+            self.Q0 = np.eye(k) #* 1.e-2
+            self.R = np.eye(dim_data) #* 1.e-2
             self.MAX_ASCENT = 100
         
         self.history_loss = []
@@ -393,7 +390,12 @@ class NLDS:
         self.mu0 = Ez[0].copy() 
         self.Q0 = update_Q0(Ez, Ezz) 
         
-        self.A, self.F = update_AF(np.hstack((self.A, self.F)), self.Q, y, self.b, 
+        if self.iter == 0:
+            init = (y-Ez[missing_z]).T @ z @ pinv(Szznl) + np.eye(self.k, self.k+self.k_nl)
+        else:
+            init = np.hstack((self.A, self.F))
+        
+        self.A, self.F = update_AF(init, self.Q, y, self.b, 
                                    method, z, Szznl, Sz1znl, self.k, self.k_nl)
         
         self.C = update_C(Szz, Sxz, self.obs_matrix)
@@ -480,21 +482,6 @@ class NLDS:
                 return rmse(data, Obs)
         except:
             return None
-        
-        
-        
-    def err_f(self, data):
-        try:
-            self = nl_fit(self, data, "si")
-            _, Obs = self.gen(len(data)+self.lstep)
-            th=5.0
-            mx=max(abs(data.flatten()))
-            if(sum(abs(Obs.flatten())>mx*th)>=1):
-                return None
-            else:
-                return rmse(data, Obs[:len(data)])
-        except:
-            return None
     
             
     def l1_l2(self):
@@ -547,8 +534,8 @@ class NLDS:
         return model
             
             
-    def fit(self, x, missing, lstep=-1, max_iter=50, k = None, fit_type=None, fit_init=False,
-            lams = [0.0, 1.0, 5.0, 1e+1, 5e+1, 1e+2, 5e+2, 1e+3], l1_r = 1.0, l2_r=0.5):
+    def fit(self, x, missing, lstep=-1, max_iter=50, k = None, fit_type=None,
+            lams = [0.0, 1.0, 1e+1, 5e+1, 1e+2, 5e+2, 1e+3], l1_r = 1.0, l2_r=0.5):
         data = x
         np.seterr(over="raise")
         self.n, dim_data = data.shape
@@ -581,17 +568,10 @@ class NLDS:
         hyper_params = itertools.product(k_list, lams, trans_offset, repeat=1)
         tic1 = time.process_time()
         model =  self.search_and_fit(data, missing, max_iter, hyper_params)
-        mu0_org = model.mu0.copy()
-        if fit_init:
-            try:
-                model = nl_fit(model, data, "si")
-            except:
-                pass
         tic2 = time.process_time()
         err = model.err(data)
         if err is None:
             model.conv = 'inf'
-            model.mu0 = mu0_org
         model.print_result(time=tic2 - tic1)
         return model
     

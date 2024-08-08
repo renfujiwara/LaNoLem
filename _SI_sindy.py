@@ -7,9 +7,9 @@ from sklearn.metrics import mean_squared_error as mse
 import pysindy as ps
 from pysindy.optimizers import SSR, STLSQ, MIOSR
 from pysindy.feature_library import PolynomialLibrary
-from model.Dysts_dataset import Data
+from src.Dysts_dataset import Data
 
-from model import utils
+from src import utils
 
 noise_list=[0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
 seed_list=[1,19,42,1024,3407]

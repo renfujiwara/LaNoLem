@@ -7,7 +7,7 @@ os.environ["VECLIB_NUM_THREADS"]="1"
 os.environ["NUMEXPR_NUM_THREADS"]="1"
 os.environ["NUMBA_NUM_THREADS"]="1"
 
-from model import NLDS, make_data, plot_result
+from src import NLDS, make_data, plot_result
 
 
 def main(args):
