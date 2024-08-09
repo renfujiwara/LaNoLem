@@ -2,8 +2,6 @@
 
 Code for reproducing [LaNoLem](),
 
-Also, main.zip is the archive of this repository.
-
 Gurobi optimizer is used in one of the comparison methods (MIOSR), so if you want to reproduce the evaluation experiments, you will need a Gurobi license (free for academic use).
 
 ## Quick demo (for poetry)
