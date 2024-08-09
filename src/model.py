@@ -234,7 +234,7 @@ def _backward(mu, mu_t, V, Phat, A_nl, ks, k_d2, k_d3, k, k_nl, j_delta, comb_li
 
 
 class LaNoLem:
-    def __init__(self, dim_list=[2, 3, 4], tol = 1.e-2, ptol = 1.e-10, th = 1.e-3, num_works=-1, 
+    def __init__(self, dim_list=[2, 3, 4], tol = 1.e-2, ptol = 1.e-10, th = 1.e-2, num_works=-1, 
                  print_log = False, verbose=False, random_state = 42):
         
         self.dim_list = dim_list
@@ -259,11 +259,11 @@ class LaNoLem:
         if(self.obs_matrix == "diag"):
             self.C = np.eye(dim_data)
             self.mu0 = np.zeros(k) 
-            self.A = np.eye(k) #+ rand.normal(0, 1, size=(k, k)) * 1e-7
+            self.A = np.eye(k)
             self.F = np.zeros((k,k_nl))
             self.b = np.zeros(k)
             self.d = np.zeros(dim_data)
-            self.Q = np.eye(k) * 1e-2
+            self.Q = np.eye(k) 
             self.Q0 = np.eye(k) * 1e+7 
             self.R = np.eye(dim_data) 
             self.MAX_ASCENT = 5 
@@ -271,14 +271,14 @@ class LaNoLem:
             u, sig, v = svd(data, full_matrices=False)
             self.C = v[:k].T
             self.mu0 = np.zeros(k) 
-            self.A = np.eye(k) #+ rand.normal(0, 1, size=(k, k))
+            self.A = np.eye(k) 
             self.F = np.zeros((k,k_nl))
             self.b = np.zeros(k)
             self.d = np.zeros(dim_data)
-            self.Q = np.eye(k) 
-            self.Q0 = np.eye(k)
+            self.Q = np.eye(k)
+            self.Q0 = np.eye(k) 
             self.R = np.eye(dim_data)
-            self.MAX_ASCENT = 100
+            self.MAX_ASCENT = 5
             
         self.history_loss = []
         self.history_llh = []
@@ -337,7 +337,10 @@ class LaNoLem:
         self.mu0 = Ez[0].copy() 
         self.Q0 = update_Q0(Ez, Ezz) 
         
-        init = np.hstack((self.A, self.F))
+        if self.iter == 0:
+            init = Sz1znl @ pinv(Szznl)
+        else:
+            init = np.hstack((self.A, self.F))
         self.A, self.F = update_AF(init, self.Q, y, self.b, 
                                    method, z, Szznl, Sz1znl, self.k, self.k_nl)
         
@@ -389,9 +392,9 @@ class LaNoLem:
 
     
     def modeling_cost(self, data):
-        cost = compute_model_cost(self.A - np.eye(self.k)) + compute_model_cost(self.F) + compute_model_cost(self.C, False) \
+        cost = compute_model_cost(self.A) + compute_model_cost(self.F) + compute_model_cost(self.C, False) \
             + compute_model_cost(self.Q, False) + compute_model_cost(self.R, False) + compute_model_cost(self.mu0, False) \
-            + compute_model_cost(self.Q0, False) + compute_model_cost(np.ones(self.k), n_bits=1)
+            + compute_model_cost(self.Q0, False) 
         if self.trans_offset:
             cost += compute_model_cost(self.b)
         if self.obs_offset:

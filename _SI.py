@@ -17,7 +17,7 @@ import multiprocessing
 
 from src import LaNoLem, utils
 
-noise_list=[0.05, 0.1, 0.25, 0.5, 0.75, 1.0]
+noise_list=[0.05, 0.1, 0.25, 0.5]
 seed_list=[1,19,42,1024,3407]
 
 

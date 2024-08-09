@@ -6,18 +6,10 @@ import seaborn as sns
 import numpy as np
 import itertools as it
 from scipy.stats import norm
-from copy import deepcopy as dcopy
 from numba import njit
-from sklearn.metrics import root_mean_squared_error as rmse
 from sklearn.preprocessing import PolynomialFeatures
 
-#-----------------------------#
-# lmfit (default)
-XTL=1.e-8
-FTL=1.e-8
-MAXFEV=100 
 INF = 1.e+10
-#-----------------------------#
 h = 1.e-5
 
 def get_k_nl(k, dim):
@@ -51,7 +43,7 @@ def compute_coding_cost(X, Y):
 
 
 @njit(cache=True)
-def compute_model_cost(X, sparse=True, n_bits=32, zero=1e-8):
+def compute_model_cost(X, sparse=True, n_bits=32, zero=1e-5):
     if sparse:
         X_abs = np.abs(X)
         X_nonzero = np.count_nonzero(X_abs > zero)
@@ -72,55 +64,6 @@ def l1(lam, params):
 @njit(cache=True)
 def l2(lam, params):
     return np.sum(np.power(lam *params, 2)) 
-
-
-def make_result(model, hyper_param, dim_poly, data, loss):
-    result = {"hyper_param": hyper_param}
-    result["dim_poly"] = [dim_poly]
-    param = model.A - np.eye(model.k)
-    params = np.hstack((param, model.F))
-    mx = np.max(np.abs(params))
-    threshold_u = mx * model.th * 10
-    threshold_b = mx * model.th
-    # if(model.fit_type == 'Robust'): 
-    result["loss"] = loss
-    
-    if mx <= 1.e-5:
-        result["loss"] =  INF
-        result["mdl"] = INF
-        result["mdl_s"] = INF 
-    elif ((np.count_nonzero(np.abs(param) >= threshold_b) < 1)):
-        result["loss"] =  INF
-        result["mdl"] = INF
-        result["mdl_s"] = INF            
-    else:
-        for row in params:
-            if np.count_nonzero(np.abs(row) >= threshold_u) >= (model.k * 2):
-                # result["loss"] =  INF
-                result["mdl"] = INF
-                result["mdl_s"] = model.modeling_cost(data)
-                break
-            elif np.count_nonzero(np.abs(row) >= threshold_b) < 1:
-                result["mdl"] = INF
-                result["mdl_s"] = INF  
-                break
-        else:    
-            result["mdl"] = model.modeling_cost(data)
-            result["mdl_s"] = result["mdl"]
-    # else:
-    #     if (np.count_nonzero(np.abs(param) >= model.th) < model.k):
-    #         result["loss"] = INF
-    #         result["mdl"] = INF
-    #         result["mdl_s"] = INF  
-    #     else:
-    #         result["loss"] = loss
-    #         result["mdl"] = model.modeling_cost(data)
-    #         result["mdl_s"] = result["mdl"]
-    result["err"] = model.err(data)
-    
-    if (result["err"] is None):
-        result["err"] = INF
-    return result
 
 
 @njit(cache=True)
@@ -171,6 +114,32 @@ def jacobian(z, A, F, j_delta, k_nl, comb_list):
     return F @ jacobian / (2*h) + A
 
 
+def make_result(model, hyper_param, dim_poly, data, loss):
+    result = {"hyper_param": hyper_param}
+    result["dim_poly"] = [dim_poly]
+    param = model.A - np.eye(model.k)
+    params = np.hstack((param, model.F))
+    mx = np.max(np.abs(params))
+    result["loss"] = loss
+    
+    if loss >= INF:
+        result["mdl"] = INF
+        result["mdl_s"] = INF
+    elif mx <= model.th:
+        result["mdl"] = INF
+        result["mdl_s"] = INF          
+    else:
+        result["mdl"] = model.modeling_cost(data)
+        result["mdl_s"] = result["mdl"]
+            
+    result["err"] = model.err(data)
+    
+    if (result["err"] is None):
+        result["err"] = INF
+        result["mdl"] = INF
+    return result
+
+
 def plot_result(model, data, setting, fsize=3.3, missing = None):
     dataset_name = setting['data_name']
     if setting['xticklabels'] is None:
@@ -193,13 +162,13 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
     else:
         
         w = np.concatenate((model.C @ (model.A - np.eye(model.k)), model.C @ model.F), axis=1)/setting['dt']
-        
+    size = 20
     if setting['gt'] is not None:
         gt_org = setting['gt']
         k_org = setting['gt'].shape[0]
         vmin = np.min(gt_org) - 0.1
         vmax = np.max(gt_org) + 0.1
-        plt.rcParams["font.size"] = 18
+        plt.rcParams["font.size"] = 24
         plt.rcParams['mathtext.fontset'] = 'cm'
         fig, (ax1, ax2) = plt.subplots(1, 2, 
                                        gridspec_kw=dict(width_ratios=[1,2.5], height_ratios=[1], wspace=0.1, hspace=0.3),
@@ -208,19 +177,19 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
                     xticklabels=xticklabels[:k_org],
                     yticklabels=yticklabels, vmin=vmin, vmax=vmax,
                     cmap='coolwarm', fmt ='1.1e', center=0.0, cbar=None, ax=ax1, annot=annot)
-        ax1.tick_params(axis = 'x', labelrotation = 30)
-        ax1.tick_params(axis = 'y', labelrotation = 0)
+        ax1.tick_params(axis = 'x', labelrotation = 30, labelsize=size)
+        ax1.tick_params(axis = 'y', labelrotation = 0, labelsize=size)
         ax1.tick_params(pad=0.5)
         
         sns.heatmap(gt_org[:,k_org:], 
                     xticklabels=xticklabels[k_org:],
                     yticklabels=[], vmin=vmin, vmax=vmax,
                     cmap='coolwarm', fmt ='1.1e', center=0.0, cbar=None, ax=ax2, annot=annot)
-        ax2.tick_params(axis = 'x', labelrotation = 30)
-        ax2.tick_params(axis = 'y', labelrotation = 0)
+        ax2.tick_params(axis = 'x', labelrotation = 30, labelsize=size)
+        ax2.tick_params(axis = 'y', labelrotation = 0, labelsize=size)
         ax2.tick_params(pad=0.5)
         # ax1.set_xlabel("RHS", fontsize=14)
-        fig.savefig(f"./{dir_path}/ground_truth.{fig_type}", bbox_inches='tight', pad_inches=0.1)
+        fig.savefig(f"./{dir_path}/ground_truth.{fig_type}", pad_inches=0.1)
         
         slabels = xticklabels
     else:
@@ -228,7 +197,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
         vmax = np.max(w) + 0.1
         slabels = make_feature_names(model.k, model.dim_poly)
     
-    plt.rcParams["font.size"] = 18
+    plt.rcParams["font.size"] = 24
     plt.rcParams['mathtext.fontset'] = 'cm'
     fig, (ax1, ax2) = plt.subplots(1, 2, 
                                     gridspec_kw=dict(width_ratios=[1,3], height_ratios=[1], wspace=0.1, hspace=0.3),
@@ -237,24 +206,24 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
                 xticklabels=slabels[:model.k],
                 yticklabels=slabels[:model.k], vmin=vmin, vmax=vmax,
                 cmap='coolwarm', fmt ='1.1e', center=0.0, cbar=None, ax=ax1, annot=annot)
-    ax1.tick_params(axis = 'x', labelrotation = 30)
-    ax1.tick_params(axis = 'y', labelrotation = 0)
+    ax1.tick_params(axis = 'x', labelrotation = 30, labelsize=size)
+    ax1.tick_params(axis = 'y', labelrotation = 0, labelsize=size)
     ax1.tick_params(pad=0.5)
     
     sns.heatmap(w[:,model.k:], 
                 xticklabels=slabels[model.k:],
                 yticklabels=[], vmin=vmin, vmax=vmax,
                 cmap='coolwarm', fmt ='1.1e', center=0.0, ax=ax2, annot=annot)
-    ax2.tick_params(axis = 'x', labelrotation = 30)
-    ax2.tick_params(axis = 'y', labelrotation = 0)
+    ax2.tick_params(axis = 'x', labelrotation = 30, labelsize=size)
+    ax2.tick_params(axis = 'y', labelrotation = 0, labelsize=size)
     ax2.tick_params(pad=0.5)
     cbar = ax2.collections[0].colorbar
     cbar.ax.tick_params(labelsize=13)
-    fig.savefig(f"./{dir_path}/st_weight_3_1.{fig_type}", bbox_inches='tight', pad_inches=0.1)
+    fig.savefig(f"./{dir_path}/st_weight_3_1.{fig_type}", pad_inches=0.1)
     
     
     if setting['gt'] is None:
-        plt.rcParams["font.size"] = 12
+        plt.rcParams["font.size"] = 16
         plt.rcParams['mathtext.fontset'] = 'cm'
         plt.figure(figsize=(0.7, fsize))
         sns.heatmap(model.C, 
@@ -263,7 +232,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
                     cmap='coolwarm', fmt ='1.1e', center=0.0, square=True)
         
         plt.xlabel("State")
-        plt.savefig(f"./{dir_path}/group.{fig_type}", bbox_inches='tight', pad_inches=0.1)
+        plt.savefig(f"./{dir_path}/group.{fig_type}", pad_inches=0.1)
         
     plt.rcParams["font.size"] = 28
     fig, ax = plt.subplots(figsize=(6.4,2.4))
@@ -279,7 +248,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
     
     ax.set_xlabel("Time", fontsize=28)
     ax.set_ylabel("Value", fontsize=28)
-    fig.savefig(f"{dir_path}/org.{fig_type}", bbox_inches='tight', pad_inches=0.1)
+    fig.savefig(f"{dir_path}/org.{fig_type}", pad_inches=0.1)
         
     
     plt.rcParams["font.size"] = 28
@@ -289,7 +258,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
     ax.set_xlabel("Time", fontsize=28)
     ax.set_ylabel("Value", fontsize=28)
     fig.legend(loc='center', bbox_to_anchor=(.5, 1.1), ncol=4, fontsize=32)
-    fig.savefig(f"{dir_path}/smoothed_latent_dynamics.{fig_type}", bbox_inches='tight', pad_inches=0.1)
+    fig.savefig(f"{dir_path}/smoothed_latent_dynamics.{fig_type}", pad_inches=0.1)
     
     
     with open(f'{dir_path}/model.pickle', mode='wb') as f:
