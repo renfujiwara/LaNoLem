@@ -393,8 +393,8 @@ class LaNoLem:
     
     def modeling_cost(self, data):
         cost = compute_model_cost(self.A) + compute_model_cost(self.F) + compute_model_cost(self.C, False) \
-            + compute_model_cost(self.Q, False) + compute_model_cost(self.R, False) + compute_model_cost(self.mu0, False) \
-            + compute_model_cost(self.Q0, False) 
+            # + compute_model_cost(self.Q, False) + compute_model_cost(self.R, False) + compute_model_cost(self.mu0, False) \
+            # + compute_model_cost(self.Q0, False) 
         if self.trans_offset:
             cost += compute_model_cost(self.b)
         if self.obs_offset:

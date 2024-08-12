@@ -189,7 +189,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
         ax2.tick_params(axis = 'y', labelrotation = 0, labelsize=size)
         ax2.tick_params(pad=0.5)
         # ax1.set_xlabel("RHS", fontsize=14)
-        fig.savefig(f"./{dir_path}/ground_truth.{fig_type}", pad_inches=0.1)
+        fig.savefig(f"./{dir_path}/ground_truth.{fig_type}")
         
         slabels = xticklabels
     else:
@@ -219,7 +219,7 @@ def plot_result(model, data, setting, fsize=3.3, missing = None):
     ax2.tick_params(pad=0.5)
     cbar = ax2.collections[0].colorbar
     cbar.ax.tick_params(labelsize=13)
-    fig.savefig(f"./{dir_path}/st_weight_3_1.{fig_type}", pad_inches=0.1)
+    fig.savefig(f"./{dir_path}/st_weight_3_1.{fig_type}")
     
     
     if setting['gt'] is None:
