@@ -12,7 +12,7 @@ def make_data(data_name):
             setting = yaml.safe_load(file)
         setting['data_name'] = data_name
         plot_args ={}
-        df = pd.read_csv("./data/googletrends/outdoor_7.csv")
+        df = pd.read_csv("./data/googletrends/outdoor.csv")
         df1 = df.drop(['date', 'Diving'], axis=1)
         df1 = scipy.stats.zscore(df1)
         df1['date'] = pd.to_datetime(df['date'])

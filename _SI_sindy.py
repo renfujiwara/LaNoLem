@@ -65,7 +65,7 @@ def evaluate(args):
         
             
 def parse_args():
-    desc = "hyperparameter tuning"
+    desc = "arg"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--dataset_name', default=None, type=str, help='string to identify experiment')
     parser.add_argument('--num_works', default=4, type=int, help='num process')

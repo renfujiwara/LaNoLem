@@ -49,7 +49,6 @@ def _iter(dataset, coef, equation_name, dt, name, l1_r, l2_r):
     
 def evaluate(args):
     save_path = f'./result/SI/'
-    # Dataset = Data(noise_list, seed_list, n = 600)
     Dataset = Data()
     Dataset.make_all_data(noise_list, seed_list, n = 600)
     l = Dataset.get_len()
@@ -90,7 +89,7 @@ def evaluate(args):
         
             
 def parse_args():
-    desc = "hyperparameter tuning"
+    desc = "arg"
     parser = argparse.ArgumentParser(description=desc)
     parser.add_argument('--dataset_name', default=None, type=str, help='string to identify experiment')
     parser.add_argument('--num_works', default=4, type=int, help='num process')
