@@ -2,9 +2,7 @@ num_works=-1
 
 today=$(date "+%Y%m%d")
 mkdir -p ./log/si/${today}
-# rtype='Lasso'
 # rtype='Naive'
-# rtype='Ridge'
 rtype='normal'
 
 logfn="./log/si/${today}/SI_eval_${rtype}.txt"

@@ -19,11 +19,3 @@ Gurobi optimizer is used in one of the comparison methods (MIOSR), so if you wan
     # (Please see Section 4)  
     See Demo.ipynb
 
-## Quick demo
-    Installation
-    $ pip install -r requirements.txt
-
-    Quick demo: System Identification
-    # (Please see Section 4)  
-    see Demo.ipynb
-

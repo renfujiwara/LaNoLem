@@ -13,7 +13,7 @@ def make_data(data_name):
         setting['data_name'] = data_name
         plot_args ={}
         df = pd.read_csv("./data/googletrends/outdoor.csv")
-        df1 = df.drop(['date', 'Diving'], axis=1)
+        df1 = df.drop(['date'], axis=1)
         df1 = scipy.stats.zscore(df1)
         df1['date'] = pd.to_datetime(df['date'])
         df = df1[(df1['date'] <= "2022-12-25") & (df['date'] >= "2010-04-05")].drop('date',axis=1).copy()
